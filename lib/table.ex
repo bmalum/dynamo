@@ -68,7 +68,7 @@ defmodule Dynamo.Table do
     query = if sk != nil, do: put_in(query, ["Key", "sk"], %{"S" => sk}), else: query
 
     case AWS.DynamoDB.get_item(Dynamo.AWS.client(), query) do
-      {:ok, %{"Item" => item}, _} -> {:ok, item}
+      {:ok, %{"Item" => item}, _} -> {:ok, item |> Dynamo.Helper.decode_item(as: struct.__struct__)}
       {:ok, %{}, _} -> {:ok, nil}
       {:error, error} -> {:error, error}
     end
@@ -173,7 +173,7 @@ defmodule Dynamo.Table do
 
   defp query(_query, limit, acc, _last_key)
        when limit != :infinity and length(acc) >= limit do
-        Enum.take(acc, limit)
+       {:ok, Enum.take(acc, limit)}
   end
 
   defp query(query, limit, acc, last_key)
@@ -186,9 +186,9 @@ defmodule Dynamo.Table do
 
       {:ok, %{"Items" => items}, _} ->
         case limit do
-          :infinity -> acc ++ items
+          :infinity -> {:ok, acc ++ items}
           limit ->
-            Enum.take(acc ++ items, limit)
+            {:ok, Enum.take(acc ++ items, limit)}
         end
 
       {:error, error} ->
@@ -216,6 +216,7 @@ defmodule Dynamo.Table do
 
     build_query(pk, table_name: table)
     |> query(:infinity, [], nil)
+    |> decode_res(struct)
   end
 
   @doc """
@@ -235,5 +236,13 @@ defmodule Dynamo.Table do
     |> Keyword.merge(options)
     build_query(pk, opts)
     |> query(opts[:limit], [], nil)
+    |> decode_res(struct)
+  end
+
+  defp decode_res(res, struct) do
+    case res do
+      {:ok, items} -> {:ok, items |> Dynamo.Helper.decode_item(as: struct.__struct__)}
+      {:error, error} -> {:error, error}
+    end
   end
 end
