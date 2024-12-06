@@ -25,7 +25,7 @@ defmodule Dynamo.Table do
 
     table = struct.__struct__.table_name()
 
-    payload = %{"TableName" => table, "Item" => item} |> IO.inspect()
+    payload = %{"TableName" => table, "Item" => item}
 
     case AWS.DynamoDB.put_item(Dynamo.AWS.client(), payload) do
       {:ok, _, _} -> {:ok, item |> Dynamo.Helper.decode_item(as: struct.__struct__)}
@@ -173,7 +173,7 @@ defmodule Dynamo.Table do
 
   defp query(_query, limit, acc, _last_key)
        when limit != :infinity and length(acc) >= limit do
-    acc
+        Enum.take(acc, limit)
   end
 
   defp query(query, limit, acc, last_key)
@@ -187,7 +187,8 @@ defmodule Dynamo.Table do
       {:ok, %{"Items" => items}, _} ->
         case limit do
           :infinity -> acc ++ items
-          limit -> Enum.take(acc ++ items, limit)
+          limit ->
+            Enum.take(acc ++ items, limit)
         end
 
       {:error, error} ->
@@ -230,9 +231,9 @@ defmodule Dynamo.Table do
   def list_items(struct, options) when is_struct(struct) do
     pk = Dynamo.Schema.generate_partition_key(struct)
     table = struct.__struct__.table_name
-    opts = [table_name: table]
-    Keyword.merge(opts, options)
-    build_query(pk, options)
-    |> query(:infinity, [], nil)
+    opts = [table_name: table, limit: :infinity]
+    |> Keyword.merge(options)
+    build_query(pk, opts)
+    |> query(opts[:limit], [], nil)
   end
 end
