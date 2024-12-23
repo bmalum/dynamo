@@ -4,7 +4,7 @@ defmodule Dynamo.AWS do
     AWS.Client.create(
       creds.access_key_id,
       creds.secret_access_key,
-      creds.token,
+      creds[:token],
       creds[:region] || "us-east-1"
     )
   end
