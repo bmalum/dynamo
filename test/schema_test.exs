@@ -5,7 +5,7 @@ defmodule Dynamo.SchemaTest do
   # MultiKey Key generation test (partition & sort key)
 
   defmodule TestItem do
-    use Dynamo.Schema
+    use Dynamo.Schema, prefix_sort_key: true
 
     item do
       table_name "test_table"
@@ -195,7 +195,7 @@ defmodule Dynamo.SchemaTest do
     test "generates sort key" do
       item = %AnotherTestItem{id: "123", name: "John"}
       result = Dynamo.Schema.generate_and_add_sort_key(item)
-      assert result.sk == "name#John"
+      assert result.sk == "John"
     end
 
     test "generates keys with empty values" do
@@ -205,7 +205,7 @@ defmodule Dynamo.SchemaTest do
                |> Dynamo.Schema.generate_and_add_sort_key()
 
       assert result.pk == "id#empty#anothertestitem"
-      assert result.sk == "name#test"
+      assert result.sk == "test"
     end
   end
 end

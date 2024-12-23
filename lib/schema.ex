@@ -32,9 +32,24 @@ defmodule Dynamo.Schema do
 
   alias Dynamo.Schema
 
-  defmacro __using__(_) do
+  defmacro __using__(opts \\ []) do
+    default_opts = [
+      prefix_sort_key: false,
+      suffix_partition_key: true,
+      key_seperator: "#",
+      partition_key_name: "pk",
+      sort_key_name: "sk",
+      table_has_sort_key: true
+    ]
+
+    opts = Keyword.merge(default_opts, opts)
+
+    IO.inspect(opts)
+
     quote do
       import Dynamo.Schema
+      @prefix_sort_key unquote(opts[:prefix_sort_key])
+      def settings, do: unquote(opts)
     end
   end
 
@@ -66,6 +81,7 @@ defmodule Dynamo.Schema do
       defoverridable before_write: 1
     end
   end
+
   @doc """
   Generates a partition key string based on the struct's defined partition key fields.
 
@@ -80,19 +96,28 @@ defmodule Dynamo.Schema do
   """
   def generate_partition_key(arg) do
     # TODO conifg name - remove prefix if name is key?!
-    name = arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
+    name =
+      arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
 
-    val = arg.__struct__.partition_key
-    |> Enum.map(fn elm ->
-      [
-        Atom.to_string(elm),
-        if(Map.get(arg, elm, "empty") == nil, do: "empty", else: Map.get(arg, elm, "empty"))
-      ]
-    end)
-    |> List.flatten()
-    # TODO make this configurable
-    |> Enum.join("#")
-    "#{val}##{name}"
+    sperator = arg.__struct__.settings()[:key_seperator]
+
+    val =
+      arg.__struct__.partition_key
+      |> Enum.map(fn elm ->
+        [
+          Atom.to_string(elm),
+          if(Map.get(arg, elm, "empty") == nil, do: "empty", else: Map.get(arg, elm, "empty"))
+        ]
+      end)
+      |> List.flatten()
+      # TODO make this configurable
+      |> Enum.join(sperator)
+
+    if arg.__struct__.settings()[:suffix_partition_key] do
+      "#{val}#{sperator}#{name}"
+    else
+      val
+    end
   end
 
   @doc """
@@ -108,7 +133,9 @@ defmodule Dynamo.Schema do
   """
   def generate_sort_key(arg) do
     # TODO conifg name - remove prefix if name is key?!
-    arg.__struct__.sort_key
+    seperator = arg.__struct__.settings()[:key_seperator]
+
+    val = arg.__struct__.sort_key
     |> Enum.map(fn elm ->
       [
         Atom.to_string(elm),
@@ -117,7 +144,15 @@ defmodule Dynamo.Schema do
     end)
     |> List.flatten()
     # TODO make this configurable
-    |> Enum.join("#")
+    |> Enum.join(seperator)
+
+    if arg.__struct__.settings()[:prefix_sort_key] == true do
+      val
+    else
+      [_| rest] = val |> String.split(seperator)
+      IO.inspect(rest)
+      Enum.join(rest, seperator)
+    end
   end
 
   @doc """
@@ -149,7 +184,6 @@ defmodule Dynamo.Schema do
     # TODO conifg name - remove prefix if name is key?!
     Map.put(arg, :pk, v)
   end
-
 
   def prepare_struct(tuple_list) do
     _x = for elm <- tuple_list, do: prepare_struct_elm(elm)

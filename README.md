@@ -29,11 +29,11 @@ be found at <https://hexdocs.pm/dynamo>.
 - [x] put_item
 - [x] list_items
 - [x] query
+- [x] Condig seperator for composit keys
+- [x] Config for suffix on partition_key
+- [x] Config for prefix on sort_key (if single key)
 - [ ] Config key names (default, :pk, :sk)
-- [ ] Condig seperator for composit keys
-- [ ] Config for suffix on partition_key
-- [ ] Config for prefix on sort_key (if single key)
-- [ ] add __type__ to struct with the item name as default value
+- [ ] ?? add __type__ to struct with the item name as default value
 - [ ] batch_write item
 - [ ] scan / parallel scan
 - [ ] update readme
