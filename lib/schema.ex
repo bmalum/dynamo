@@ -44,8 +44,6 @@ defmodule Dynamo.Schema do
 
     opts = Keyword.merge(default_opts, opts)
 
-    IO.inspect(opts)
-
     quote do
       import Dynamo.Schema
       @prefix_sort_key unquote(opts[:prefix_sort_key])
@@ -150,7 +148,6 @@ defmodule Dynamo.Schema do
       val
     else
       [_| rest] = val |> String.split(seperator)
-      IO.inspect(rest)
       Enum.join(rest, seperator)
     end
   end
