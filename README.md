@@ -4,12 +4,12 @@ This project provides an Ecto-like DSL for working with DynamoDB in Elixir. It a
 
 ## Installation
 
-If available in Hex, the package can be installed by adding dynamo to your list of dependencies in mix.exs:
+It is *not yet* available in Hex, the package can be installed by adding dynamo github repo to your list of dependencies in mix.exs:
 
 ```elixir 
 def deps do
   [
-    {:dynamo, "~> 0.1.0"}
+    {:dynamo, github: "bmalum/dynamo"}
   ]
 end
 ```
