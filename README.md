@@ -44,9 +44,24 @@ end
 ### Encoding and Decoding
 
 ```elixir
-user = %Dynamo.User{id: "123", name: "John Doe", email: "john@example.com", age: 30}
-encoded_user = MyApp.User.encode(user)
-decoded_user = MyApp.User.decode(encoded_user)
+iex>  %Dynamo.User{} |> Dynamo.Encoder.encode_root
+%{
+  "email" => %{"S" => "001"},
+  "first_name" => %{"NULL" => true},
+  "tenant" => %{"S" => "yolo"},
+  "uuid4" => %{"S" => "Nomnomnom"}
+}
+
+iex> Dynamo.Decoder.decode(x)
+%{
+  "email" => "001",
+  "first_name" => nil,
+  "tenant" => "yolo",
+  "uuid4" => "Nomnomnom"
+}
+
+iex> Dynamo.Decoder.decode(x, as: Dynamo.User)
+%Dynamo.User{email: "001", first_name: nil, tenant: "yolo", uuid4: "Nomnomnom"}
 ```
 
 ### Performing Operations
