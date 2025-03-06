@@ -78,15 +78,63 @@ user = Dynamo.User.get_item(
     }
   )
 
-# List items
+# List items with basic options
 users = Dynamo.User.list_items(
     %Dynamo.User{
-    uuid4: "no-uuid",
-    email: "hello"
+      uuid4: "no-uuid",
+      email: "hello"
     },
     [sort_key: "hello", sk_operator: :begins_with, scan_index_forward: false]
 )
- 
+
+# List items with filter expression
+filtered_users = Dynamo.User.list_items(
+  %Dynamo.User{uuid4: "no-uuid"},
+  [
+    filter_expression: "active = :active_val AND age > :min_age",
+    expression_attribute_values: %{
+      ":active_val" => %{"BOOL" => true}, 
+      ":min_age" => %{"N" => "18"}
+    }
+  ]
+)
+
+# Query a global secondary index
+index_users = Dynamo.User.list_items(
+  %Dynamo.User{email: "user@example.com"},
+  [
+    index_name: "EmailIndex",
+    consistent_read: true,
+    projection_expression: "uuid4, email, first_name"
+  ]
+)
+
+# Pagination with exclusive_start_key
+page_1 = Dynamo.User.list_items(
+  %Dynamo.User{tenant: "acme"},
+  [limit: 10]
+)
+# Use the last evaluated key from previous response for pagination
+page_2 = Dynamo.User.list_items(
+  %Dynamo.User{tenant: "acme"},
+  [
+    limit: 10, 
+    exclusive_start_key: page_1.last_evaluated_key
+  ]
+)
+
+# Batch write multiple items
+{:ok, result} = Dynamo.Table.batch_write_item([
+  %Dynamo.User{uuid4: "123", first_name: "Alice"},
+  %Dynamo.User{uuid4: "456", first_name: "Bob"}
+])
+
+# Parallel scan for better performance with large datasets
+{:ok, all_users} = Dynamo.Table.parallel_scan(Dynamo.User, 
+  segments: 8, 
+  filter_expression: "tenant = :t",
+  expression_attribute_values: %{":t" => %{"S" => "acme"}}
+)
 ```
 
 ### Overridable `before_write` Function
@@ -198,5 +246,5 @@ TODO:
 - [x] Config for suffix on partition_key
 - [x] Config for prefix on sort_key (if single key)
 - [x] Config key names (default, :pk, :sk)
-- [ ] batch_write item
-- [ ] parallel scan
+- [x] batch_write item
+- [x] parallel scan
