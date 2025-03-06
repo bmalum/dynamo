@@ -57,15 +57,19 @@ defmodule Dynamo.Table do
     pk = Dynamo.Schema.generate_partition_key(struct)
     sk = Dynamo.Schema.generate_sort_key(struct)
     table = struct.__struct__.table_name
+    config = struct.__struct__.settings()
+
+    partition_key_name = config[:partition_key_name]
+    sort_key_name = config[:sort_key_name]
 
     query = %{
       "TableName" => table,
       "Key" => %{
-        "pk" => %{"S" => pk}
+        partition_key_name => %{"S" => pk}
       }
     }
 
-    query = if sk != nil, do: put_in(query, ["Key", "sk"], %{"S" => sk}), else: query
+    query = if sk != nil, do: put_in(query, ["Key", sort_key_name], %{"S" => sk}), else: query
 
     case AWS.DynamoDB.get_item(Dynamo.AWS.client(), query) do
       {:ok, %{"Item" => item}, _} -> {:ok, item |> Dynamo.Helper.decode_item(as: struct.__struct__)}
@@ -102,7 +106,18 @@ defmodule Dynamo.Table do
     options = Keyword.merge(defaults, options)
     table = options[:table_name]
     sk = options[:sort_key]
-    pk_query_fragment = "pk = :pk"
+
+    # Get configuration from module specified in options or use defaults
+    config = if options[:schema_module] do
+      options[:schema_module].settings()
+    else
+      Dynamo.Config.config()
+    end
+
+    partition_key_name = config[:partition_key_name]
+    sort_key_name = config[:sort_key_name]
+
+    pk_query_fragment = "#{partition_key_name} = :pk"
 
     query = %{
       "TableName" => table,
@@ -129,13 +144,13 @@ defmodule Dynamo.Table do
           put_in(
             query,
             ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND sk = :sk"
+            "#{pk_query_fragment} AND #{sort_key_name} = :sk"
           )
         :begins_with ->
           put_in(
             query,
             ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND begins_with(sk, :sk)"
+            "#{pk_query_fragment} AND begins_with(#{sort_key_name}, :sk)"
           )
       end
     else
@@ -214,7 +229,7 @@ defmodule Dynamo.Table do
     pk = Dynamo.Schema.generate_partition_key(struct)
     table = struct.__struct__.table_name
 
-    build_query(pk, table_name: table)
+    build_query(pk, table_name: table, schema_module: struct.__struct__)
     |> query(:infinity, [], nil)
     |> decode_res(struct)
   end
@@ -232,7 +247,7 @@ defmodule Dynamo.Table do
   def list_items(struct, options) when is_struct(struct) do
     pk = Dynamo.Schema.generate_partition_key(struct)
     table = struct.__struct__.table_name
-    opts = [table_name: table, limit: :infinity]
+    opts = [table_name: table, limit: :infinity, schema_module: struct.__struct__]
     |> Keyword.merge(options)
     build_query(pk, opts)
     |> query(opts[:limit], [], nil)

@@ -33,21 +33,13 @@ defmodule Dynamo.Schema do
   alias Dynamo.Schema
 
   defmacro __using__(opts \\ []) do
-    default_opts = [
-      prefix_sort_key: false,
-      suffix_partition_key: true,
-      key_seperator: "#",
-      partition_key_name: "pk",
-      sort_key_name: "sk",
-      table_has_sort_key: true
-    ]
-
-    opts = Keyword.merge(default_opts, opts)
-
     quote do
       import Dynamo.Schema
-      @prefix_sort_key unquote(opts[:prefix_sort_key])
-      def settings, do: unquote(opts)
+      @schema_config unquote(opts)
+
+      def settings do
+        Dynamo.Config.config(@schema_config)
+      end
     end
   end
 
@@ -93,11 +85,10 @@ defmodule Dynamo.Schema do
     String representing the partition key
   """
   def generate_partition_key(arg) do
-    # TODO conifg name - remove prefix if name is key?!
-    name =
-      arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
-
-    sperator = arg.__struct__.settings()[:key_seperator]
+    config = arg.__struct__.settings()
+    name = arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
+    # Fix the typo: consistently use key_separator instead of key_seperator
+    separator = config[:key_separator]
 
     val =
       arg.__struct__.partition_key
@@ -108,11 +99,10 @@ defmodule Dynamo.Schema do
         ]
       end)
       |> List.flatten()
-      # TODO make this configurable
-      |> Enum.join(sperator)
+      |> Enum.join(separator)
 
-    if arg.__struct__.settings()[:suffix_partition_key] do
-      "#{val}#{sperator}#{name}"
+    if config[:suffix_partition_key] do
+      "#{val}#{separator}#{name}"
     else
       val
     end
@@ -130,8 +120,8 @@ defmodule Dynamo.Schema do
     String representing the sort key
   """
   def generate_sort_key(arg) do
-    # TODO conifg name - remove prefix if name is key?!
-    seperator = arg.__struct__.settings()[:key_seperator]
+    config = arg.__struct__.settings()
+    separator = config[:key_separator]
 
     val = arg.__struct__.sort_key
     |> Enum.map(fn elm ->
@@ -141,14 +131,13 @@ defmodule Dynamo.Schema do
       ]
     end)
     |> List.flatten()
-    # TODO make this configurable
-    |> Enum.join(seperator)
+    |> Enum.join(separator)
 
-    if arg.__struct__.settings()[:prefix_sort_key] == true do
+    if config[:prefix_sort_key] do
       val
     else
-      [_| rest] = val |> String.split(seperator)
-      Enum.join(rest, seperator)
+      [_| rest] = val |> String.split(separator)
+      Enum.join(rest, separator)
     end
   end
 
@@ -163,8 +152,9 @@ defmodule Dynamo.Schema do
   """
   def generate_and_add_sort_key(arg) do
     v = generate_sort_key(arg)
-    # TODO conifg name - remove prefix if name is key?!
-    Map.put(arg, :sk, v)
+    config = arg.__struct__.settings()
+    sort_key_name = String.to_atom(config[:sort_key_name])
+    Map.put(arg, sort_key_name, v)
   end
 
   @doc """
@@ -178,8 +168,9 @@ defmodule Dynamo.Schema do
   """
   def generate_and_add_partition_key(arg) do
     v = generate_partition_key(arg)
-    # TODO conifg name - remove prefix if name is key?!
-    Map.put(arg, :pk, v)
+    config = arg.__struct__.settings()
+    partition_key_name = String.to_atom(config[:partition_key_name])
+    Map.put(arg, partition_key_name, v)
   end
 
   def prepare_struct(tuple_list) do

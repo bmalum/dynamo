@@ -125,10 +125,63 @@ defmodule Dynamo.Sensor do
 - Decoding DynamoDB marshalled items into structs
 - General DynamoDB query builder
 - Basic operations: `put_item`, `list_items`, `query`
+- Flexible configuration system with application, process, and schema-level settings
 - Configurable composite key separator
 - Configurable suffix for partition keys
 - Configurable prefix for sort keys (if using single key)
+- Configurable key names (partition_key_name, sort_key_name)
 - Overridable `before_write` function for custom logic before writing items
+
+## Configuration
+
+The library provides a flexible configuration system through the `Dynamo.Config` module. Configuration can be specified at three levels:
+
+### 1. Application Configuration (config.exs)
+
+```elixir
+config :dynamo,
+  partition_key_name: "pk",  # Default: "pk"
+  sort_key_name: "sk",       # Default: "sk"
+  key_separator: "#",        # Default: "#"
+  suffix_partition_key: true,  # Default: true
+  prefix_sort_key: false       # Default: false
+```
+
+### 2. Process-level Configuration
+
+```elixir
+# Override configuration for the current process only
+Dynamo.Config.put_process_config(key_separator: "-")
+
+# Clear process-level configuration
+Dynamo.Config.clear_process_config()
+```
+
+### 3. Schema-level Configuration
+
+```elixir
+defmodule MyApp.User do
+  # Configuration specific to this schema
+  use Dynamo.Schema, 
+    key_separator: "_",
+    prefix_sort_key: true
+    
+  item do
+    # schema definition...
+  end
+end
+```
+
+### Configuration Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `partition_key_name` | Name of the partition key in DynamoDB | `"pk"` |
+| `sort_key_name` | Name of the sort key in DynamoDB | `"sk"` |
+| `key_separator` | Separator for composite keys | `"#"` |
+| `suffix_partition_key` | Whether to add entity type suffix to partition key | `true` |
+| `prefix_sort_key` | Whether to include field name as prefix in sort key | `false` |
+| `table_has_sort_key` | Whether the table has a sort key | `true` |
 
 
 TODO:
@@ -144,6 +197,6 @@ TODO:
 - [x] Condig seperator for composit keys
 - [x] Config for suffix on partition_key
 - [x] Config for prefix on sort_key (if single key)
-- [ ] Config key names (default, :pk, :sk)
+- [x] Config key names (default, :pk, :sk)
 - [ ] batch_write item
 - [ ] parallel scan
