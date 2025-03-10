@@ -370,6 +370,43 @@ end
 
 ## Advanced Usage
 
+### Using Dynamo with LiveBook
+
+When using Dynamo in LiveBook, you may encounter issues with on-the-fly compiled modules. This is because LiveBook compiles modules in a way that can interfere with protocol implementations like `Dynamo.Encodable`.
+
+To work around this issue, you need to override the `before_write/1` function in each schema module and manually handle the encoding process:
+
+```elixir
+defmodule MyApp.Product do
+  use Dynamo.Schema
+  
+  item do
+    table_name "products"
+    
+    field :category_id, partition_key: true
+    field :product_id, sort_key: true
+    field :name
+    field :price
+  end
+  
+  def before_write(arg) do
+    arg
+    |> IO.inspect() # Optional, useful for debugging
+    |> Dynamo.Schema.generate_and_add_partition_key()
+    |> Dynamo.Schema.generate_and_add_sort_key()
+    |> Dynamo.Encodable.MyApp.Product.encode([])
+    |> Map.get("M")
+  end
+end
+```
+
+This approach ensures that your schema modules work correctly in LiveBook by:
+1. Generating and adding partition and sort keys
+2. Explicitly calling the encode function for your specific module
+3. Extracting the "M" (map) field from the encoded result
+
+For a complete example of using Dynamo with LiveBook, see the [DynamoDB Bulk Insert Example](dynamo_bulk_insert_example.livemd) in the repository.
+
 ### Custom Key Generation
 
 You can override the `before_write` function to customize how keys are generated:
