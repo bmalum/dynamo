@@ -28,10 +28,55 @@ defmodule Dynamo.Schema do
   - Partition key and sort key specifications
   - Automatic key generation
   - Table name definition
+
+  ## Configuration Options
+
+  When using `Dynamo.Schema`, you can provide configuration options that override the defaults:
+
+      defmodule MyApp.User do
+        use Dynamo.Schema,
+          key_separator: "_",
+          prefix_sort_key: true,
+          suffix_partition_key: false
+
+        item do
+          # schema definition...
+        end
+      end
+
+  Available configuration options:
+
+  - `key_separator`: String used to separate parts of composite keys (default: "#")
+  - `prefix_sort_key`: Whether to include field name as prefix in sort key (default: false)
+  - `suffix_partition_key`: Whether to add entity type suffix to partition key (default: true)
+  - `partition_key_name`: Name of the partition key in DynamoDB (default: "pk")
+  - `sort_key_name`: Name of the sort key in DynamoDB (default: "sk")
+  - `table_has_sort_key`: Whether the table has a sort key (default: true)
+
+  These options can also be configured globally in your application configuration or
+  at runtime using `Dynamo.Config` functions.
   """
 
   alias Dynamo.Schema
 
+  @doc """
+  Sets up a module to use the Dynamo.Schema functionality.
+
+  This macro imports the necessary functions and sets up the configuration
+  for the schema. It also defines a `settings/0` function that returns the
+  merged configuration from defaults, application config, process config,
+  and schema-specific options.
+
+  ## Parameters
+    * `opts` - Optional keyword list of schema-specific configuration options
+
+  ## Example
+      defmodule MyApp.User do
+        use Dynamo.Schema, key_separator: "_", prefix_sort_key: true
+
+        # schema definition...
+      end
+  """
   defmacro __using__(opts \\ []) do
     quote do
       import Dynamo.Schema
@@ -43,6 +88,41 @@ defmodule Dynamo.Schema do
     end
   end
 
+  @doc """
+  Defines the structure of a DynamoDB item.
+
+  This macro is the core of the schema definition. It sets up the necessary attributes
+  and functions for working with DynamoDB items, including:
+
+  - Table name
+  - Field definitions
+  - Partition and sort key specifications
+  - Automatic key generation
+  - Encoding and decoding behavior
+
+  ## Example
+
+      item do
+        table_name "users"
+
+        field :id, partition_key: true
+        field :email
+        field :name
+        field :created_at, sort_key: true
+      end
+
+  ## Overriding the before_write Function
+
+  You can override the `before_write/1` function to add custom logic before writing items to DynamoDB:
+
+      def before_write(item) do
+        item
+        |> Map.put(:updated_at, DateTime.utc_now())
+        |> Dynamo.Schema.generate_and_add_partition_key()
+        |> Dynamo.Schema.generate_and_add_sort_key()
+        |> Dynamo.Encoder.encode_root()
+      end
+  """
   defmacro item(do: block) do
     quote do
       @derive [Dynamo.Encodable]
@@ -87,7 +167,6 @@ defmodule Dynamo.Schema do
   def generate_partition_key(arg) do
     config = arg.__struct__.settings()
     name = arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
-    # Fix the typo: consistently use key_separator instead of key_seperator
     separator = config[:key_separator]
 
     val =
@@ -173,18 +252,57 @@ defmodule Dynamo.Schema do
     Map.put(arg, partition_key_name, v)
   end
 
+  @doc """
+  Prepares the struct definition from field definitions.
+
+  Converts the field definitions collected during schema definition into
+  a format suitable for use with `defstruct`.
+
+  ## Parameters
+    * `tuple_list` - List of field definitions
+
+  ## Returns
+    * List of field definitions suitable for `defstruct`
+  """
   def prepare_struct(tuple_list) do
     _x = for elm <- tuple_list, do: prepare_struct_elm(elm)
   end
 
+  @doc """
+  Processes a field definition with a database key and default value.
+
+  ## Parameters
+    * `{field_name, _db_key, default}` - Field definition tuple
+
+  ## Returns
+    * Field definition in the format `{field_name, default}`
+  """
   def prepare_struct_elm({field_name, _db_key, default}) do
     {field_name, default}
   end
 
+  @doc """
+  Processes a field definition with a default value.
+
+  ## Parameters
+    * `{field_name, default}` - Field definition tuple
+
+  ## Returns
+    * Field definition in the format `{field_name, default}`
+  """
   def prepare_struct_elm({field_name, default}) do
     {field_name, default}
   end
 
+  @doc """
+  Processes a field definition without a default value.
+
+  ## Parameters
+    * `{field_name}` - Field definition tuple
+
+  ## Returns
+    * Field name atom
+  """
   def prepare_struct_elm({field_name}) do
     field_name
   end

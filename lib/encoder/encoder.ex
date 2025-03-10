@@ -33,13 +33,40 @@ defmodule Dynamo.Encoder do
 
   def encode(value, options), do: Encodable.encode(value, options)
 
-  # Use this in case you want to encode something already in Dynamo format
-  # for some reason I cannot fathom. If you find yourself using this, please open an issue
-  # so I can find out why and better support this.
+  @doc """
+  Encodes a value that is already in Dynamo format.
+
+  This is a specialized function that you should rarely need to use. If you find yourself
+  needing this function, please open an issue so we can better understand your use case.
+
+  ## Parameters
+    * `value` - The value to encode
+    * `options` - Optional encoding options
+
+  ## Returns
+    * The encoded value
+  """
   def encode!(value, options \\ []) do
     Encodable.encode(value, options)
   end
 
+  @doc """
+  Encodes a value and extracts the inner content from the resulting map.
+
+  This function is particularly useful when encoding structs for DynamoDB operations,
+  as it removes the outer wrapper and returns just the map of attributes.
+
+  ## Parameters
+    * `value` - The value to encode
+    * `options` - Optional encoding options
+
+  ## Returns
+    * The encoded value with the outer wrapper removed
+
+  ## Examples
+      iex> Dynamo.Encoder.encode_root(%User{id: "123", name: "John"})
+      %{"id" => %{"S" => "123"}, "name" => %{"S" => "John"}}
+  """
   def encode_root(value, options \\ []) do
     case Encodable.encode(value, options) do
       %{"M" => value} -> value
@@ -47,6 +74,24 @@ defmodule Dynamo.Encoder do
     end
   end
 
+  @doc """
+  Converts an Elixir type atom to the corresponding DynamoDB type string.
+
+  This function maps Elixir type atoms to the string representation used by DynamoDB.
+
+  ## Parameters
+    * `atom` - The atom representing an Elixir type
+
+  ## Returns
+    * String representing the DynamoDB type
+
+  ## Examples
+      iex> Dynamo.Encoder.atom_to_dynamo_type(:string)
+      "S"
+
+      iex> Dynamo.Encoder.atom_to_dynamo_type(:number)
+      "N"
+  """
   def atom_to_dynamo_type(:blob), do: "B"
   def atom_to_dynamo_type(:boolean), do: "BOOL"
   def atom_to_dynamo_type(:blob_set), do: "BS"
