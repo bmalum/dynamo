@@ -1,5 +1,5 @@
 defmodule Dynamo.User do
-  use Dynamo.Schema, key_seperator: "_"
+  use Dynamo.Schema, key_separator: "_"
 
   item do
     field(:uuid4, default: "Nomnomnom")

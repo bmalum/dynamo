@@ -28,29 +28,101 @@ defmodule Dynamo.Schema do
   - Partition key and sort key specifications
   - Automatic key generation
   - Table name definition
+
+  ## Configuration Options
+
+  When using `Dynamo.Schema`, you can provide configuration options that override the defaults:
+
+      defmodule MyApp.User do
+        use Dynamo.Schema,
+          key_separator: "_",
+          prefix_sort_key: true,
+          suffix_partition_key: false
+
+        item do
+          # schema definition...
+        end
+      end
+
+  Available configuration options:
+
+  - `key_separator`: String used to separate parts of composite keys (default: "#")
+  - `prefix_sort_key`: Whether to include field name as prefix in sort key (default: false)
+  - `suffix_partition_key`: Whether to add entity type suffix to partition key (default: true)
+  - `partition_key_name`: Name of the partition key in DynamoDB (default: "pk")
+  - `sort_key_name`: Name of the sort key in DynamoDB (default: "sk")
+  - `table_has_sort_key`: Whether the table has a sort key (default: true)
+
+  These options can also be configured globally in your application configuration or
+  at runtime using `Dynamo.Config` functions.
   """
 
   alias Dynamo.Schema
 
+  @doc """
+  Sets up a module to use the Dynamo.Schema functionality.
+
+  This macro imports the necessary functions and sets up the configuration
+  for the schema. It also defines a `settings/0` function that returns the
+  merged configuration from defaults, application config, process config,
+  and schema-specific options.
+
+  ## Parameters
+    * `opts` - Optional keyword list of schema-specific configuration options
+
+  ## Example
+      defmodule MyApp.User do
+        use Dynamo.Schema, key_separator: "_", prefix_sort_key: true
+
+        # schema definition...
+      end
+  """
   defmacro __using__(opts \\ []) do
-    default_opts = [
-      prefix_sort_key: false,
-      suffix_partition_key: true,
-      key_seperator: "#",
-      partition_key_name: "pk",
-      sort_key_name: "sk",
-      table_has_sort_key: true
-    ]
-
-    opts = Keyword.merge(default_opts, opts)
-
     quote do
       import Dynamo.Schema
-      @prefix_sort_key unquote(opts[:prefix_sort_key])
-      def settings, do: unquote(opts)
+      @schema_config unquote(opts)
+
+      def settings do
+        Dynamo.Config.config(@schema_config)
+      end
     end
   end
 
+  @doc """
+  Defines the structure of a DynamoDB item.
+
+  This macro is the core of the schema definition. It sets up the necessary attributes
+  and functions for working with DynamoDB items, including:
+
+  - Table name
+  - Field definitions
+  - Partition and sort key specifications
+  - Automatic key generation
+  - Encoding and decoding behavior
+
+  ## Example
+
+      item do
+        table_name "users"
+
+        field :id, partition_key: true
+        field :email
+        field :name
+        field :created_at, sort_key: true
+      end
+
+  ## Overriding the before_write Function
+
+  You can override the `before_write/1` function to add custom logic before writing items to DynamoDB:
+
+      def before_write(item) do
+        item
+        |> Map.put(:updated_at, DateTime.utc_now())
+        |> Dynamo.Schema.generate_and_add_partition_key()
+        |> Dynamo.Schema.generate_and_add_sort_key()
+        |> Dynamo.Encoder.encode_root()
+      end
+  """
   defmacro item(do: block) do
     quote do
       @derive [Dynamo.Encodable]
@@ -93,11 +165,9 @@ defmodule Dynamo.Schema do
     String representing the partition key
   """
   def generate_partition_key(arg) do
-    # TODO conifg name - remove prefix if name is key?!
-    name =
-      arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
-
-    sperator = arg.__struct__.settings()[:key_seperator]
+    config = arg.__struct__.settings()
+    name = arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
+    separator = config[:key_separator]
 
     val =
       arg.__struct__.partition_key
@@ -108,11 +178,10 @@ defmodule Dynamo.Schema do
         ]
       end)
       |> List.flatten()
-      # TODO make this configurable
-      |> Enum.join(sperator)
+      |> Enum.join(separator)
 
-    if arg.__struct__.settings()[:suffix_partition_key] do
-      "#{val}#{sperator}#{name}"
+    if config[:suffix_partition_key] do
+      "#{val}#{separator}#{name}"
     else
       val
     end
@@ -130,8 +199,8 @@ defmodule Dynamo.Schema do
     String representing the sort key
   """
   def generate_sort_key(arg) do
-    # TODO conifg name - remove prefix if name is key?!
-    seperator = arg.__struct__.settings()[:key_seperator]
+    config = arg.__struct__.settings()
+    separator = config[:key_separator]
 
     val = arg.__struct__.sort_key
     |> Enum.map(fn elm ->
@@ -141,14 +210,13 @@ defmodule Dynamo.Schema do
       ]
     end)
     |> List.flatten()
-    # TODO make this configurable
-    |> Enum.join(seperator)
+    |> Enum.join(separator)
 
-    if arg.__struct__.settings()[:prefix_sort_key] == true do
+    if config[:prefix_sort_key] do
       val
     else
-      [_| rest] = val |> String.split(seperator)
-      Enum.join(rest, seperator)
+      [_| rest] = val |> String.split(separator)
+      Enum.join(rest, separator)
     end
   end
 
@@ -163,8 +231,9 @@ defmodule Dynamo.Schema do
   """
   def generate_and_add_sort_key(arg) do
     v = generate_sort_key(arg)
-    # TODO conifg name - remove prefix if name is key?!
-    Map.put(arg, :sk, v)
+    config = arg.__struct__.settings()
+    sort_key_name = String.to_atom(config[:sort_key_name])
+    Map.put(arg, sort_key_name, v)
   end
 
   @doc """
@@ -178,22 +247,62 @@ defmodule Dynamo.Schema do
   """
   def generate_and_add_partition_key(arg) do
     v = generate_partition_key(arg)
-    # TODO conifg name - remove prefix if name is key?!
-    Map.put(arg, :pk, v)
+    config = arg.__struct__.settings()
+    partition_key_name = String.to_atom(config[:partition_key_name])
+    Map.put(arg, partition_key_name, v)
   end
 
+  @doc """
+  Prepares the struct definition from field definitions.
+
+  Converts the field definitions collected during schema definition into
+  a format suitable for use with `defstruct`.
+
+  ## Parameters
+    * `tuple_list` - List of field definitions
+
+  ## Returns
+    * List of field definitions suitable for `defstruct`
+  """
   def prepare_struct(tuple_list) do
     _x = for elm <- tuple_list, do: prepare_struct_elm(elm)
   end
 
+  @doc """
+  Processes a field definition with a database key and default value.
+
+  ## Parameters
+    * `{field_name, _db_key, default}` - Field definition tuple
+
+  ## Returns
+    * Field definition in the format `{field_name, default}`
+  """
   def prepare_struct_elm({field_name, _db_key, default}) do
     {field_name, default}
   end
 
+  @doc """
+  Processes a field definition with a default value.
+
+  ## Parameters
+    * `{field_name, default}` - Field definition tuple
+
+  ## Returns
+    * Field definition in the format `{field_name, default}`
+  """
   def prepare_struct_elm({field_name, default}) do
     {field_name, default}
   end
 
+  @doc """
+  Processes a field definition without a default value.
+
+  ## Parameters
+    * `{field_name}` - Field definition tuple
+
+  ## Returns
+    * Field name atom
+  """
   def prepare_struct_elm({field_name}) do
     field_name
   end

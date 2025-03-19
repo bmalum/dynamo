@@ -11,6 +11,24 @@ defmodule Dynamo.Decoder do
 
   alias Dynamo.Decodable
 
+  @doc """
+  Decodes a DynamoDB item into a struct of the specified type.
+
+  This function first decodes the DynamoDB-formatted item into a regular Elixir map,
+  then converts it to the specified struct type, and finally applies any custom
+  decoding logic defined by the struct's implementation of the Decodable protocol.
+
+  ## Parameters
+    * `item` - The DynamoDB item to decode
+    * `struct_module` - The struct module to decode into
+
+  ## Returns
+    * An instance of the specified struct with values from the DynamoDB item
+
+  ## Examples
+      iex> Dynamo.Decoder.decode(dynamo_item, as: User)
+      %User{id: "123", name: "John", email: "john@example.com"}
+  """
   def decode(item, as: struct_module) do
     item
     |> decode
