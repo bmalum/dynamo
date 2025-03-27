@@ -368,6 +368,128 @@ end
 | `prefix_sort_key` | Whether to include field name as prefix in sort key | `false` |
 | `table_has_sort_key` | Whether the table has a sort key | `true` |
 
+## Command Line Interface
+
+Dynamo provides several mix tasks to help you work with DynamoDB tables:
+
+### Creating Tables
+
+```bash
+# Create a table with default configuration (pk/sk keys)
+mix dynamo.create_table users
+
+# Create a table with custom keys
+mix dynamo.create_table products --partition-key category_id --sort-key product_id
+
+# Create a table with only a partition key (no sort key)
+mix dynamo.create_table simple_counter --partition-key counter_id --no-sort-key
+
+# Create a table with provisioned capacity
+mix dynamo.create_table high_traffic --billing-mode PROVISIONED --read-capacity 50 --write-capacity 25
+
+# Use with local DynamoDB
+mix dynamo.create_table local_test --endpoint http://localhost:8000
+```
+
+### Listing Tables
+
+```bash
+# List all tables
+mix dynamo.list_tables
+
+# Filter tables by name
+mix dynamo.list_tables --name-contains user
+
+# List tables in a specific region
+mix dynamo.list_tables --region eu-west-1
+```
+
+### Deleting Tables
+
+```bash
+# Delete a table (will prompt for confirmation)
+mix dynamo.delete_table old_users
+
+# Force delete without confirmation
+mix dynamo.delete_table old_users --force
+```
+
+### Generating Schemas
+
+```bash
+# Generate a schema from an existing table
+mix dynamo.generate_schema users
+
+# Generate a schema with a specific module name
+mix dynamo.generate_schema users --module MyApp.User
+
+# Generate a schema with a custom output path
+mix dynamo.generate_schema users --output lib/schemas/user.ex
+```
+
+## Transaction Support
+
+Dynamo supports DynamoDB transactions, allowing you to perform multiple operations atomically:
+
+```elixir
+# Transfer money between accounts atomically
+Dynamo.Transaction.transact([
+  # Check that source account has sufficient funds
+  {:check, %Account{id: "account-123"},
+    "balance >= :amount",
+    %{":amount" => %{"N" => "100.00"}}},
+    
+  # Decrease source account balance
+  {:update, %Account{id: "account-123"},
+    %{balance: {:decrement, 100.00}}},
+    
+  # Increase destination account balance
+  {:update, %Account{id: "account-456"},
+    %{balance: {:increment, 100.00}}}
+])
+```
+
+Transaction operations include:
+- `:put` - Create or replace an item
+- `:update` - Update an existing item
+- `:delete` - Delete an item
+- `:check` - Verify a condition without modifying data
+
+Special update operators:
+- `{:increment, amount}` - Add a value to a number
+- `{:decrement, amount}` - Subtract a value from a number
+- `{:append, list}` - Append elements to a list
+- `{:prepend, list}` - Prepend elements to a list
+- `{:if_not_exists, default}` - Set a value only if it doesn't exist
+
+## Error Handling
+
+Dynamo includes standardized error handling that converts DynamoDB errors into meaningful Elixir errors:
+
+```elixir
+case Dynamo.Table.get_item(%User{id: "user-123"}) do
+  {:ok, user} -> 
+    # Handle success
+    IO.puts("Found user: #{user.name}")
+    
+  {:error, %Dynamo.Error{type: :resource_not_found}} ->
+    # Handle specific error type
+    IO.puts("User not found")
+    
+  {:error, %Dynamo.Error{} = error} ->
+    # Handle general errors
+    IO.puts("Error: #{error.message}")
+end
+```
+
+Common error types:
+- `:resource_not_found` - The requested resource doesn't exist
+- `:provisioned_throughput_exceeded` - Rate limits exceeded
+- `:conditional_check_failed` - Condition expression evaluated to false
+- `:validation_error` - Parameter validation failed
+- `:access_denied` - Insufficient permissions
+- `:transaction_conflict` - Transaction conflicts with another operation
+
 ## Advanced Usage
 
 ### Using Dynamo with LiveBook
