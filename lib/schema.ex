@@ -170,7 +170,7 @@ defmodule Dynamo.Schema do
     separator = config[:key_separator]
 
     val =
-      arg.__struct__.partition_key
+      arg.__struct__.partition_key()
       |> Enum.map(fn elm ->
         [
           Atom.to_string(elm),
@@ -202,7 +202,7 @@ defmodule Dynamo.Schema do
     config = arg.__struct__.settings()
     separator = config[:key_separator]
 
-    val = arg.__struct__.sort_key
+    val = arg.__struct__.sort_key()
     |> Enum.map(fn elm ->
       [
         Atom.to_string(elm),
@@ -269,40 +269,24 @@ defmodule Dynamo.Schema do
   end
 
   @doc """
-  Processes a field definition with a database key and default value.
+  Processes a field definition based on its format.
 
   ## Parameters
-    * `{field_name, _db_key, default}` - Field definition tuple
+    * `{field_name, _db_key, default}` - Field definition with database key and default value
+    * `{field_name, default}` - Field definition with default value
+    * `{field_name}` - Field definition without default value
 
   ## Returns
-    * Field definition in the format `{field_name, default}`
+    * Field definition in the appropriate format for defstruct
   """
   def prepare_struct_elm({field_name, _db_key, default}) do
     {field_name, default}
   end
 
-  @doc """
-  Processes a field definition with a default value.
-
-  ## Parameters
-    * `{field_name, default}` - Field definition tuple
-
-  ## Returns
-    * Field definition in the format `{field_name, default}`
-  """
   def prepare_struct_elm({field_name, default}) do
     {field_name, default}
   end
 
-  @doc """
-  Processes a field definition without a default value.
-
-  ## Parameters
-    * `{field_name}` - Field definition tuple
-
-  ## Returns
-    * Field name atom
-  """
   def prepare_struct_elm({field_name}) do
     field_name
   end
