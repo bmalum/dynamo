@@ -36,8 +36,7 @@ defmodule Dynamo.Schema do
       defmodule MyApp.User do
         use Dynamo.Schema,
           key_separator: "_",
-          prefix_sort_key: true,
-          suffix_partition_key: false
+          prefix_sort_key: true
 
         item do
           # schema definition...
@@ -48,7 +47,6 @@ defmodule Dynamo.Schema do
 
   - `key_separator`: String used to separate parts of composite keys (default: "#")
   - `prefix_sort_key`: Whether to include field name as prefix in sort key (default: false)
-  - `suffix_partition_key`: Whether to add entity type suffix to partition key (default: true)
   - `partition_key_name`: Name of the partition key in DynamoDB (default: "pk")
   - `sort_key_name`: Name of the sort key in DynamoDB (default: "sk")
   - `table_has_sort_key`: Whether the table has a sort key (default: true)
@@ -166,25 +164,22 @@ defmodule Dynamo.Schema do
   """
   def generate_partition_key(arg) do
     config = arg.__struct__.settings()
-    name = arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
+
+    name =
+      arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
+
     separator = config[:key_separator]
 
-    val =
+    # Get only the field values (without field names)
+    values =
       arg.__struct__.partition_key()
       |> Enum.map(fn elm ->
-        [
-          Atom.to_string(elm),
-          if(Map.get(arg, elm, "empty") == nil, do: "empty", else: Map.get(arg, elm, "empty"))
-        ]
+        if(Map.get(arg, elm, "empty") == nil, do: "empty", else: Map.get(arg, elm, "empty"))
       end)
-      |> List.flatten()
       |> Enum.join(separator)
 
-    if config[:suffix_partition_key] do
-      "#{val}#{separator}#{name}"
-    else
-      val
-    end
+    # Always put entity name first, then the values
+    "#{name}#{separator}#{values}"
   end
 
   @doc """
@@ -202,20 +197,21 @@ defmodule Dynamo.Schema do
     config = arg.__struct__.settings()
     separator = config[:key_separator]
 
-    val = arg.__struct__.sort_key()
-    |> Enum.map(fn elm ->
-      [
-        Atom.to_string(elm),
-        if(Map.get(arg, elm, "empty") == nil, do: "empty", else: Map.get(arg, elm, "empty"))
-      ]
-    end)
-    |> List.flatten()
-    |> Enum.join(separator)
+    val =
+      arg.__struct__.sort_key()
+      |> Enum.map(fn elm ->
+        [
+          Atom.to_string(elm),
+          if(Map.get(arg, elm, "empty") == nil, do: "empty", else: Map.get(arg, elm, "empty"))
+        ]
+      end)
+      |> List.flatten()
+      |> Enum.join(separator)
 
     if config[:prefix_sort_key] do
       val
     else
-      [_| rest] = val |> String.split(separator)
+      [_ | rest] = val |> String.split(separator)
       Enum.join(rest, separator)
     end
   end

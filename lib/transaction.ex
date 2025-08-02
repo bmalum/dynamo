@@ -91,7 +91,7 @@ defmodule Dynamo.Transaction do
     end
 
     # Execute the transaction
-    case AWS.DynamoDB.transact_write_items(client, request) do
+    case Dynamo.DynamoDB.transact_write_items(client, request) do
       {:ok, response, _} ->
         {:ok, response}
 

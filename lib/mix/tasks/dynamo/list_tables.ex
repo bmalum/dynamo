@@ -34,8 +34,8 @@ defmodule Mix.Tasks.Dynamo.ListTables do
   @doc false
   def run(args) do
     # Start required applications
-    Application.ensure_all_started(:aws)
-    Application.ensure_all_started(:aws_credentials)
+    Application.ensure_all_started(:req)
+    Application.ensure_all_started(:jason)
 
     # Parse arguments
     {options, _, _} = OptionParser.parse(args,
@@ -74,7 +74,7 @@ defmodule Mix.Tasks.Dynamo.ListTables do
       request
     end
 
-    case AWS.DynamoDB.list_tables(client, request) do
+    case Dynamo.DynamoDB.list_tables(client, request) do
       {:ok, response, _context} ->
         tables = response["TableNames"] || []
         last_evaluated_table = response["LastEvaluatedTableName"]

@@ -18,14 +18,12 @@ defmodule Dynamo.Config do
     partition_key_name: "pk",
     sort_key_name: "sk",
     key_separator: "#",
-    suffix_partition_key: true,
     prefix_sort_key: false
   ```
   """
 
   @default_config [
     prefix_sort_key: false,
-    suffix_partition_key: true,
     key_separator: "#",
     partition_key_name: "pk",
     sort_key_name: "sk",

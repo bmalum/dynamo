@@ -63,7 +63,7 @@ defmodule Dynamo.Table do
         payload
       end
 
-      case AWS.DynamoDB.put_item(client, payload) do
+      case Dynamo.DynamoDB.put_item(client, payload) do
         {:ok, _, _} ->
           {:ok, item |> Dynamo.Helper.decode_item(as: struct.__struct__)}
 
@@ -165,7 +165,7 @@ defmodule Dynamo.Table do
         query
       end
 
-      case AWS.DynamoDB.get_item(client, query) do
+      case Dynamo.DynamoDB.get_item(client, query) do
         {:ok, %{"Item" => item}, _} ->
           {:ok, item |> Dynamo.Helper.decode_item(as: struct.__struct__)}
 
@@ -438,7 +438,7 @@ defmodule Dynamo.Table do
        when length(acc) < limit or limit == :infinity do
     query = if last_key, do: Map.put(query, "ExclusiveStartKey", last_key), else: query
 
-    case AWS.DynamoDB.query(Dynamo.AWS.client(), query) do
+    case Dynamo.DynamoDB.query(Dynamo.AWS.client(), query) do
       {:ok, %{"Items" => items, "LastEvaluatedKey" => last_evaluated_key}, _} ->
         query(query, limit, acc ++ items, last_evaluated_key)
 
@@ -634,7 +634,7 @@ defmodule Dynamo.Table do
           }
         }
 
-        case AWS.DynamoDB.batch_write_item(Dynamo.AWS.client(), batch_request) do
+        case Dynamo.DynamoDB.batch_write_item(Dynamo.AWS.client(), batch_request) do
           {:ok, %{"UnprocessedItems" => %{^table_name => unprocessed}} = _response, _context} when unprocessed != [] ->
             # Some items weren't processed - add them to unprocessed list
             {processed_count + (length(chunk) - length(unprocessed)),
@@ -823,7 +823,7 @@ defmodule Dynamo.Table do
     # Add the exclusive start key for pagination if present
     scan_params = if last_key, do: Map.put(params, "ExclusiveStartKey", last_key), else: params
 
-    case AWS.DynamoDB.scan(Dynamo.AWS.client(), scan_params) do
+    case Dynamo.DynamoDB.scan(Dynamo.AWS.client(), scan_params) do
       {:ok, %{"Items" => items, "LastEvaluatedKey" => last_evaluated_key}, _} ->
         # Continue scanning if we have a last evaluated key
         scan_segment_with_pagination(params, limit, acc ++ items, last_evaluated_key)
@@ -923,7 +923,7 @@ defmodule Dynamo.Table do
         payload
       end
 
-      case AWS.DynamoDB.delete_item(client, payload) do
+      case Dynamo.DynamoDB.delete_item(client, payload) do
         {:ok, %{"Attributes" => attributes}, _} ->
           {:ok, attributes |> Dynamo.Helper.decode_item(as: struct.__struct__)}
 
@@ -1033,7 +1033,7 @@ defmodule Dynamo.Table do
       params
     end
 
-    case AWS.DynamoDB.scan(client, params) do
+    case Dynamo.DynamoDB.scan(client, params) do
       {:ok, %{"Items" => items, "LastEvaluatedKey" => last_evaluated_key}, _} ->
         decoded_items = Dynamo.Helper.decode_item(items, as: schema_module)
         {:ok, %{items: decoded_items, last_evaluated_key: last_evaluated_key}}
@@ -1175,7 +1175,7 @@ defmodule Dynamo.Table do
         payload
       end
 
-      case AWS.DynamoDB.update_item(client, payload) do
+      case Dynamo.DynamoDB.update_item(client, payload) do
         {:ok, %{"Attributes" => attributes}, _} ->
           {:ok, attributes |> Dynamo.Helper.decode_item(as: struct.__struct__)}
 
@@ -1351,7 +1351,7 @@ defmodule Dynamo.Table do
         }
       }
 
-      case AWS.DynamoDB.batch_get_item(client, batch_request) do
+      case Dynamo.DynamoDB.batch_get_item(client, batch_request) do
         {:ok, %{"Responses" => %{^table_name => items}, "UnprocessedKeys" => %{^table_name => %{"Keys" => unprocessed}}}, _} ->
           # We have items and some unprocessed keys
           {:cont, {items_acc ++ items, unprocessed_acc ++ unprocessed}}

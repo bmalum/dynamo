@@ -325,7 +325,6 @@ config :dynamo,
   partition_key_name: "pk",
   sort_key_name: "sk",
   key_separator: "#",
-  suffix_partition_key: true,
   prefix_sort_key: false,
   table_has_sort_key: true
 ```
@@ -350,8 +349,7 @@ Per-schema configuration:
 defmodule MyApp.User do
   use Dynamo.Schema,
     key_separator: "_",
-    prefix_sort_key: true,
-    suffix_partition_key: false
+    prefix_sort_key: true
     
   # schema definition...
 end
@@ -364,7 +362,6 @@ end
 | `partition_key_name` | Name of the partition key in DynamoDB | `"pk"` |
 | `sort_key_name` | Name of the sort key in DynamoDB | `"sk"` |
 | `key_separator` | Separator for composite keys | `"#"` |
-| `suffix_partition_key` | Whether to add entity type suffix to partition key | `true` |
 | `prefix_sort_key` | Whether to include field name as prefix in sort key | `false` |
 | `table_has_sort_key` | Whether the table has a sort key | `true` |
 
