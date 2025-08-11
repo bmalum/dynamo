@@ -1,7 +1,87 @@
 defmodule Dynamo.Table do
-   @moduledoc """
-  Provides functions for interacting with DynamoDB tables.
-  This module handles basic CRUD operations and query building for DynamoDB tables.
+  @moduledoc """
+  Provides functions for interacting with DynamoDB tables and Global Secondary Indexes (GSIs).
+
+  This module handles basic CRUD operations, query building, and GSI querying for DynamoDB tables.
+  It automatically resolves the correct partition and sort keys based on schema configuration
+  when querying GSIs.
+
+  ## Basic Table Operations
+
+      # Create an item
+      {:ok, user} = Dynamo.Table.put_item(%User{id: "123", email: "user@example.com"})
+
+      # Retrieve an item
+      {:ok, user} = Dynamo.Table.get_item(%User{id: "123"})
+
+      # Query table items
+      {:ok, users} = Dynamo.Table.list_items(%User{id: "123"})
+
+  ## Global Secondary Index (GSI) Queries
+
+  When your schema defines GSIs, you can query them using the same `list_items/2` function
+  by specifying the `index_name` option. The system automatically handles key resolution:
+
+      # Query by email using EmailIndex GSI
+      {:ok, users} = Dynamo.Table.list_items(
+        %User{email: "user@example.com"},
+        index_name: "EmailIndex"
+      )
+
+      # Query by tenant with sort key operations using TenantIndex GSI
+      {:ok, recent_users} = Dynamo.Table.list_items(
+        %User{tenant: "acme", created_at: "2023-01-01"},
+        index_name: "TenantIndex",
+        sk_operator: :gte
+      )
+
+      # Query with filter expressions on GSI
+      {:ok, active_users} = Dynamo.Table.list_items(
+        %User{tenant: "acme"},
+        index_name: "TenantIndex",
+        filter_expression: "status = :status",
+        expression_attribute_values: %{":status" => %{"S" => "active"}}
+      )
+
+  ## GSI Query Features
+
+  GSI queries support all the same features as table queries:
+
+  - **Sort Key Operators**: `:full_match`, `:begins_with`, `:gt`, `:lt`, `:gte`, `:lte`, `:between`
+  - **Filter Expressions**: Apply additional filtering after the query
+  - **Projection Expressions**: Specify which attributes to retrieve
+  - **Pagination**: Use `limit` and `exclusive_start_key` for pagination
+  - **Scan Direction**: Control sort order with `scan_index_forward`
+
+  ## Error Handling
+
+  GSI queries include comprehensive error handling:
+
+      case Dynamo.Table.list_items(%User{email: nil}, index_name: "EmailIndex") do
+        {:ok, users} ->
+          # Handle success
+        {:error, %Dynamo.Error{type: :validation_error, message: message}} ->
+          # Handle validation errors (missing required fields, invalid GSI name, etc.)
+          IO.puts("Validation error: \#{message}")
+        {:error, error} ->
+          # Handle other errors
+      end
+
+  Common GSI validation errors:
+  - Missing GSI partition key field data
+  - Missing GSI sort key field data when sort operations are used
+  - Invalid GSI name (with list of available indexes)
+  - Attempting to use consistent reads with GSI queries (not supported)
+
+  ## Batch Operations
+
+  Batch operations work with any schema, regardless of GSI definitions:
+
+      # Batch write multiple items
+      {:ok, result} = Dynamo.Table.batch_write_item([user1, user2, user3])
+
+      # Parallel scan for large datasets
+      {:ok, all_users} = Dynamo.Table.parallel_scan(User, segments: 8)
   """
 
 @doc """
@@ -233,7 +313,9 @@ defmodule Dynamo.Table do
       select: nil,
       consistent_read: false,
       exclusive_start_key: nil,
-      return_consumed_capacity: nil
+      return_consumed_capacity: nil,
+      gsi_partition_key_name: nil,
+      gsi_sort_key_name: nil
     ]
 
     options = Keyword.merge(defaults, options)
@@ -247,10 +329,28 @@ defmodule Dynamo.Table do
       Dynamo.Config.config()
     end
 
-    partition_key_name = config[:partition_key_name]
-    sort_key_name = config[:sort_key_name]
+    # Determine key names and whether to use ExpressionAttributeNames
+    {partition_key_name, sort_key_name, use_expression_attribute_names} = if options[:index_name] do
+      # GSI query - use GSI-specific key names if provided, otherwise use config defaults
+      gsi_pk_name = options[:gsi_partition_key_name] || config[:partition_key_name]
+      gsi_sk_name = options[:gsi_sort_key_name] || config[:sort_key_name]
 
-    pk_query_fragment = "#{partition_key_name} = :pk"
+      # For GSI queries, use ExpressionAttributeNames to avoid reserved word conflicts
+      use_attr_names = options[:gsi_partition_key_name] != nil
+      {gsi_pk_name, gsi_sk_name, use_attr_names}
+    else
+      # Table query - use standard config key names
+      {config[:partition_key_name], config[:sort_key_name], false}
+    end
+
+    # Build partition key query fragment
+    {pk_query_fragment, expression_attribute_names} = if use_expression_attribute_names do
+      # Use ExpressionAttributeNames for GSI queries to avoid reserved word conflicts
+      {"#pk = :pk", %{"#pk" => partition_key_name}}
+    else
+      # Use direct field names for table queries
+      {"#{partition_key_name} = :pk", %{}}
+    end
 
     # Build the base query
     query = %{
@@ -271,7 +371,7 @@ defmodule Dynamo.Table do
         {val, op, end_val} -> {val, op, end_val}
       end
 
-    query = if sk != nil do
+    {query, expression_attribute_names} = if sk != nil do
       # Add the first sort key value
       query = put_in(query, ["ExpressionAttributeValues", ":sk"], %{"S" => sk})
 
@@ -282,43 +382,50 @@ defmodule Dynamo.Table do
         query
       end
 
+      # Build sort key reference (with or without ExpressionAttributeNames)
+      {sk_ref, updated_attr_names} = if use_expression_attribute_names do
+        {"#sk", Map.put(expression_attribute_names, "#sk", sort_key_name)}
+      else
+        {sort_key_name, expression_attribute_names}
+      end
+
       # Build the appropriate condition expression based on the operator
-      case sk_operator do
+      updated_query = case sk_operator do
         :full_match ->
           put_in(
             query,
             ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sort_key_name} = :sk"
+            "#{pk_query_fragment} AND #{sk_ref} = :sk"
           )
         :begins_with ->
           put_in(
             query,
             ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND begins_with(#{sort_key_name}, :sk)"
+            "#{pk_query_fragment} AND begins_with(#{sk_ref}, :sk)"
           )
         :gt ->
           put_in(
             query,
             ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sort_key_name} > :sk"
+            "#{pk_query_fragment} AND #{sk_ref} > :sk"
           )
         :lt ->
           put_in(
             query,
             ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sort_key_name} < :sk"
+            "#{pk_query_fragment} AND #{sk_ref} < :sk"
           )
         :gte ->
           put_in(
             query,
             ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sort_key_name} >= :sk"
+            "#{pk_query_fragment} AND #{sk_ref} >= :sk"
           )
         :lte ->
           put_in(
             query,
             ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sort_key_name} <= :sk"
+            "#{pk_query_fragment} AND #{sk_ref} <= :sk"
           )
         :between ->
           if sk_end == nil do
@@ -327,13 +434,15 @@ defmodule Dynamo.Table do
           put_in(
             query,
             ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sort_key_name} BETWEEN :sk AND :sk_end"
+            "#{pk_query_fragment} AND #{sk_ref} BETWEEN :sk AND :sk_end"
           )
         _ ->
           raise Dynamo.Error.new(:validation_error, "Unsupported sort key operator: #{inspect(sk_operator)}")
       end
+
+      {updated_query, updated_attr_names}
     else
-      query
+      {query, expression_attribute_names}
     end
 
     # Add index name if provided
@@ -345,8 +454,13 @@ defmodule Dynamo.Table do
     # Add projection expression if provided
     query = if options[:projection_expression], do: Map.put(query, "ProjectionExpression", options[:projection_expression]), else: query
 
-    # Add expression attribute names if provided
-    query = if options[:expression_attribute_names], do: Map.put(query, "ExpressionAttributeNames", options[:expression_attribute_names]), else: query
+    # Add expression attribute names (merge generated ones with provided ones)
+    query = if map_size(expression_attribute_names) > 0 or options[:expression_attribute_names] do
+      final_attr_names = Map.merge(expression_attribute_names, options[:expression_attribute_names] || %{})
+      Map.put(query, "ExpressionAttributeNames", final_attr_names)
+    else
+      query
+    end
 
     # Add any additional expression attribute values if provided
     query = if options[:expression_attribute_values] do
@@ -371,8 +485,12 @@ defmodule Dynamo.Table do
       query
     end
 
-    # Add consistent read if provided
-    query = if options[:consistent_read], do: Map.put(query, "ConsistentRead", true), else: query
+    # Add consistent read if provided (but not for GSI queries as they don't support consistent reads)
+    query = if options[:consistent_read] && !options[:index_name] do
+      Map.put(query, "ConsistentRead", true)
+    else
+      query
+    end
 
     # Add limit if provided in options (not from external limit parameter)
     query = if options[:limit] && options[:limit] != :infinity, do: Map.put(query, "Limit", options[:limit]), else: query
@@ -548,13 +666,76 @@ defmodule Dynamo.Table do
   """
   @spec list_items(struct(), keyword()) :: {:ok, [struct()]} | {:error, Dynamo.Error.t()}
   def list_items(struct, options) when is_struct(struct) do
+    case options[:index_name] do
+      nil ->
+        # Existing table query logic
+        query_table(struct, options)
+
+      index_name ->
+        # New GSI query logic
+        query_gsi(struct, index_name, options)
+    end
+  end
+
+  # Helper function for table queries (existing logic)
+  defp query_table(struct, options) do
     pk = Dynamo.Schema.generate_partition_key(struct)
-    table = struct.__struct__.table_name
+    table = struct.__struct__.table_name()
     opts = [table_name: table, limit: :infinity, schema_module: struct.__struct__]
     |> Keyword.merge(options)
     build_query(pk, opts)
     |> query(opts[:limit], [], nil)
     |> decode_res(struct)
+  end
+
+  # Helper function for GSI queries
+  defp query_gsi(struct, index_name, options) do
+    # Determine if sort key operations are required
+    requires_sort_key = options[:sk_operator] != nil
+
+    # Validate GSI-specific options
+    with :ok <- validate_gsi_options(options),
+         {:ok, gsi_config} <- Dynamo.Schema.validate_gsi_config(struct, index_name, requires_sort_key) do
+      # Generate GSI-specific partition and sort keys
+      gsi_pk = Dynamo.Schema.generate_gsi_partition_key(struct, gsi_config)
+      gsi_sk = Dynamo.Schema.generate_gsi_sort_key(struct, gsi_config)
+
+      # Get GSI key names - use the actual field names for the GSI
+      gsi_partition_key_name = Atom.to_string(gsi_config.partition_key)
+      gsi_sort_key_name = if gsi_config.sort_key, do: Atom.to_string(gsi_config.sort_key), else: nil
+
+      # Build query options with GSI keys and key names
+      table = struct.__struct__.table_name()
+      opts = [
+        table_name: table,
+        limit: :infinity,
+        schema_module: struct.__struct__,
+        index_name: index_name,
+        sort_key: gsi_sk,
+        gsi_partition_key_name: gsi_partition_key_name,
+        gsi_sort_key_name: gsi_sort_key_name
+      ]
+      |> Keyword.merge(options)
+
+      # Build and execute query
+      build_query(gsi_pk, opts)
+      |> IO.inspect
+      |> query(opts[:limit], [], nil)
+      |> decode_res(struct)
+    else
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+
+  # Validate GSI-specific query options
+  defp validate_gsi_options(options) do
+    if options[:consistent_read] do
+      {:error, Dynamo.Error.new(:validation_error,
+        "Consistent reads are not supported for Global Secondary Index queries")}
+    else
+      :ok
+    end
   end
 
   defp decode_res(res, struct) do
