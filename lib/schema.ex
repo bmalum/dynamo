@@ -189,6 +189,7 @@ defmodule Dynamo.Schema do
       Module.register_attribute(__MODULE__, :sort_key, accumulate: true)
       Module.register_attribute(__MODULE__, :partition_key, accumulate: true)
       Module.register_attribute(__MODULE__, :global_secondary_indexes, accumulate: true)
+      Module.register_attribute(__MODULE__, :belongs_to_relations, accumulate: true)
 
       unquote(block)
 
@@ -197,6 +198,7 @@ defmodule Dynamo.Schema do
       def sort_key, do: @sort_key |> List.flatten()
       def fields, do: @fields
       def global_secondary_indexes, do: @global_secondary_indexes || []
+      def belongs_to_relations, do: @belongs_to_relations || []
 
       defstruct Schema.prepare_struct(@fields)
 
@@ -208,6 +210,82 @@ defmodule Dynamo.Schema do
       end
 
       defoverridable before_write: 1
+    end
+  end
+
+  @doc """
+  Generates a partition key for belongs_to relationships.
+
+  When an entity has a belongs_to relationship, it uses the parent entity's
+  partition key format instead of its own.
+
+  ## Parameters
+    - arg: The struct instance to generate the partition key for
+    - belongs_to_config: Map containing belongs_to configuration
+
+  ## Returns
+    String representing the partition key using parent's format
+  """
+  def generate_belongs_to_partition_key(arg, belongs_to_config) do
+    config = arg.__struct__.settings()
+    separator = config[:key_separator]
+
+    # Get the parent module name for the partition key prefix
+    parent_module = belongs_to_config.parent_module
+    parent_name = parent_module |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
+
+    # Get the foreign key value
+    foreign_key_field = belongs_to_config.foreign_key
+    foreign_key_value = Map.get(arg, foreign_key_field, "empty")
+    foreign_key_value = if foreign_key_value == nil, do: "empty", else: foreign_key_value
+
+    # Generate partition key using parent's format: parent_name#foreign_key_value
+    "#{parent_name}#{separator}#{foreign_key_value}"
+  end
+
+  @doc """
+  Generates a sort key for belongs_to relationships.
+
+  The sort key generation depends on the sk_strategy:
+  - :prefix - Prefixes the child's sort key with the entity name
+  - :use_defined - Uses the child's sort key as-is
+
+  ## Parameters
+    - arg: The struct instance to generate the sort key for
+    - belongs_to_config: Map containing belongs_to configuration
+
+  ## Returns
+    String representing the sort key
+  """
+  def generate_belongs_to_sort_key(arg, belongs_to_config) do
+    config = arg.__struct__.settings()
+    separator = config[:key_separator]
+
+    case belongs_to_config.sk_strategy do
+      :prefix ->
+        # Prefix with entity name
+        entity_name = arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
+
+        # Generate the normal sort key
+        sort_key_parts = arg.__struct__.sort_key()
+        |> Enum.map(fn elm ->
+          field_value = Map.get(arg, elm, "empty")
+          field_value = if field_value == nil, do: "empty", else: field_value
+
+          if config[:prefix_sort_key] do
+            [Atom.to_string(elm), field_value]
+          else
+            [field_value]
+          end
+        end)
+        |> List.flatten()
+        |> Enum.join(separator)
+
+        "#{entity_name}#{separator}#{sort_key_parts}"
+
+      :use_defined ->
+        # Use the regular sort key generation
+        generate_sort_key(arg)
     end
   end
 
@@ -280,6 +358,9 @@ defmodule Dynamo.Schema do
   @doc """
   Adds a generated sort key to the struct under the `:sk` key.
 
+  If the struct has belongs_to relationships, it will use the relationship's
+  sort key strategy instead of the normal generation.
+
   ## Parameters
     - arg: The struct instance to add the sort key to
 
@@ -287,7 +368,18 @@ defmodule Dynamo.Schema do
     Updated struct with sort key
   """
   def generate_and_add_sort_key(arg) do
-    v = generate_sort_key(arg)
+    belongs_to_relations = arg.__struct__.belongs_to_relations()
+
+    v = case belongs_to_relations do
+      [] ->
+        # No belongs_to relationships, use normal generation
+        generate_sort_key(arg)
+
+      [belongs_to_config | _] ->
+        # Use the first belongs_to relationship for sort key
+        generate_belongs_to_sort_key(arg, belongs_to_config)
+    end
+
     config = arg.__struct__.settings()
     sort_key_name = String.to_atom(config[:sort_key_name])
     Map.put(arg, sort_key_name, v)
@@ -296,6 +388,9 @@ defmodule Dynamo.Schema do
   @doc """
   Adds a generated partition key to the struct under the `:pk` key.
 
+  If the struct has belongs_to relationships, it will use the parent's
+  partition key format instead of its own.
+
   ## Parameters
     - arg: The struct instance to add the partition key to
 
@@ -303,7 +398,19 @@ defmodule Dynamo.Schema do
     Updated struct with partition key
   """
   def generate_and_add_partition_key(arg) do
-    v = generate_partition_key(arg)
+    belongs_to_relations = arg.__struct__.belongs_to_relations()
+
+    v = case belongs_to_relations do
+      [] ->
+        # No belongs_to relationships, use normal generation
+        generate_partition_key(arg)
+
+      [belongs_to_config | _] ->
+        # Use the first belongs_to relationship for partition key
+        # (assuming single belongs_to per entity for simplicity)
+        generate_belongs_to_partition_key(arg, belongs_to_config)
+    end
+
     config = arg.__struct__.settings()
     partition_key_name = String.to_atom(config[:partition_key_name])
     Map.put(arg, partition_key_name, v)
@@ -681,6 +788,79 @@ defmodule Dynamo.Schema do
         else
           :ok
         end
+    end
+  end
+
+  @doc """
+  Defines a belongs_to relationship for the schema.
+
+  This allows an entity to share the same partition key as another entity,
+  enabling efficient querying of related items in a single-table design.
+
+  The foreign key is automatically inferred from the parent module's partition key.
+  For example, if the parent has `partition_key [:customer_id]`, the child schema
+  must have a field named `:customer_id`.
+
+  ## Parameters
+    - relation_name: Atom name of the relationship
+    - parent_module: Module of the parent entity
+    - opts: Keyword list of relationship configuration options
+
+  ## Options
+    - `:sk_strategy` - atom, how to handle sort key (:prefix or :use_defined) (optional, defaults to :prefix)
+    - `:foreign_key` - atom, field name that references the parent's partition key (optional, auto-inferred)
+
+  ## Example
+      # Auto-inferred foreign key (recommended)
+      belongs_to :customer, Dynamo.Customer, sk_strategy: :prefix
+
+      # Explicit foreign key (for custom naming)
+      belongs_to :customer, Dynamo.Customer,
+        foreign_key: :cust_id,
+        sk_strategy: :use_defined
+  """
+  defmacro belongs_to(relation_name, parent_module, opts \\ []) do
+    quote do
+      # Get parent module's partition key to infer foreign key
+      parent_partition_keys = unquote(parent_module).partition_key()
+
+      # Auto-infer foreign key from parent's partition key (use first one if multiple)
+      inferred_foreign_key = List.first(parent_partition_keys)
+
+      # Allow explicit override of foreign key
+      foreign_key_field = unquote(opts)[:foreign_key] || inferred_foreign_key
+
+      unless foreign_key_field do
+        raise "belongs_to '#{unquote(relation_name)}' could not infer foreign key from parent module #{unquote(parent_module)}. Parent must have a partition key defined."
+      end
+
+      # Set default values for optional parameters
+      sk_strategy = unquote(opts)[:sk_strategy] || :prefix
+
+      # Validate that foreign_key field exists in schema
+      foreign_key_exists = Enum.any?(@fields, fn
+        {name, _} -> name == foreign_key_field
+        {name} -> name == foreign_key_field
+      end)
+
+      unless foreign_key_exists do
+        raise "belongs_to '#{unquote(relation_name)}' foreign_key field ':#{foreign_key_field}' does not exist in schema. Add 'field(:#{foreign_key_field})' to your schema or specify a different :foreign_key option."
+      end
+
+      # Validate sk_strategy
+      unless sk_strategy in [:prefix, :use_defined] do
+        raise "belongs_to '#{unquote(relation_name)}' sk_strategy must be :prefix or :use_defined"
+      end
+
+      # Store belongs_to configuration
+      belongs_to_config = %{
+        relation_name: unquote(relation_name),
+        parent_module: unquote(parent_module),
+        foreign_key: foreign_key_field,
+        sk_strategy: sk_strategy
+      }
+
+      @belongs_to_relations belongs_to_config
     end
   end
 

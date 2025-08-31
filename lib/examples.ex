@@ -116,12 +116,85 @@ defmodule Dynamo.Order do
   end
 end
 
-defmodule Dynamo.Examples do
+defmodule Dynamo.Customer do
   @moduledoc """
-  Example usage patterns for GSI queries demonstrating the enhanced list_items functionality.
+  Example schema showing a parent entity in belongs_to relationships.
   """
 
-  alias Dynamo.{User, Product, Order, Table}
+  use Dynamo.Schema
+
+  item do
+    field(:customer_id, partition_key: true)
+    field(:name)
+    field(:email, sort_key: true)
+    field(:created_at)
+
+    table_name("customers")
+
+    # GSI for finding customers by email
+    global_secondary_index("EmailIndex", partition_key: :email)
+  end
+end
+
+defmodule Dynamo.OrderItem do
+  @moduledoc """
+  Example schema showing belongs_to relationship with prefix strategy.
+  Items belong to orders and share the same partition key.
+  """
+
+  use Dynamo.Schema
+
+  item do
+    # foreign key to Order
+    field(:order_id)
+    field(:product_id)
+    field(:quantity)
+    field(:price)
+    field(:created_at, sort_key: true)
+
+    # This will make OrderItem use Order's partition key format
+    # and prefix its sort key with "orderitem"
+    # foreign_key is auto-inferred from Order's partition key
+    belongs_to(:order, Dynamo.Order, sk_strategy: :prefix)
+
+    table_name("order_items")
+  end
+end
+
+defmodule Dynamo.CustomerOrder do
+  @moduledoc """
+  Example schema showing belongs_to relationship with use_defined strategy.
+  Orders belong to customers and share the same partition key.
+  """
+
+  use Dynamo.Schema
+
+  item do
+    # foreign key to Customer
+    field(:customer_id)
+    field(:order_id)
+    field(:total_amount)
+    field(:status)
+    field(:created_at, sort_key: true)
+
+    # This will make CustomerOrder use Customer's partition key format
+    # and use its own sort key as-is
+    # foreign_key is auto-inferred from Customer's partition key
+    belongs_to(:customer, Dynamo.Customer, sk_strategy: :use_defined)
+
+    table_name("customer_orders")
+
+    # GSI for querying orders by status
+    global_secondary_index("StatusIndex", partition_key: :status, sort_key: :created_at)
+  end
+end
+
+defmodule Dynamo.Examples do
+  @moduledoc """
+  Example usage patterns for GSI queries and belongs_to relationships.
+  """
+
+  alias Dynamo.{User, Product, Order, Customer, OrderItem, CustomerOrder, Table}
 
   @doc """
   Example GSI query patterns for User schema
@@ -403,6 +476,89 @@ defmodule Dynamo.Examples do
       IO.puts("  PK: #{gsi_pk}")
       IO.puts("  SK: #{gsi_sk || "none"}")
     end)
+  end
+
+  @doc """
+  Example belongs_to relationship usage patterns
+  """
+  def belongs_to_examples do
+    # Create a customer
+    customer = %Customer{
+      customer_id: "cust-123",
+      name: "John Doe",
+      email: "john@example.com",
+      created_at: "2024-01-15T10:30:00Z"
+    }
+
+    # Create orders that belong to the customer
+    order1 = %CustomerOrder{
+      # foreign key
+      customer_id: "cust-123",
+      order_id: "order-456",
+      total_amount: 99.99,
+      status: "completed",
+      created_at: "2024-01-15T11:00:00Z"
+    }
+
+    order2 = %CustomerOrder{
+      # same foreign key
+      customer_id: "cust-123",
+      order_id: "order-789",
+      total_amount: 149.99,
+      status: "processing",
+      created_at: "2024-01-16T09:30:00Z"
+    }
+
+    # Create order items that belong to an order (with prefix strategy)
+    item1 = %OrderItem{
+      # foreign key
+      order_id: "order-456",
+      product_id: "prod-111",
+      quantity: 2,
+      price: 49.99,
+      created_at: "2024-01-15T11:01:00Z"
+    }
+
+    item2 = %OrderItem{
+      # same foreign key
+      order_id: "order-456",
+      product_id: "prod-222",
+      quantity: 1,
+      price: 29.99,
+      created_at: "2024-01-15T11:02:00Z"
+    }
+
+    # Key generation examples:
+
+    # Customer keys (normal generation)
+    # pk: "customer#cust-123"
+    # sk: "john@example.com"
+
+    # CustomerOrder keys (belongs_to with use_defined strategy)
+    # pk: "customer#cust-123" (uses Customer's partition key format)
+    # sk: "2024-01-15T11:00:00Z" (uses own sort key as-is)
+
+    # OrderItem keys (belongs_to with prefix strategy)
+    # pk: "order#order-456" (uses Order's partition key format)
+    # sk: "orderitem#2024-01-15T11:01:00Z" (prefixed with entity name)
+
+    # Query all orders for a customer (same partition key)
+    {:ok, _customer_orders} =
+      Table.list_items(%CustomerOrder{customer_id: "cust-123"})
+
+    # Query all items for an order (same partition key)
+    {:ok, _order_items} =
+      Table.list_items(%OrderItem{order_id: "order-456"})
+
+    # Query customer and their orders together (same partition)
+    # This would require a more complex query combining both entity types
+
+    # Query orders by status using GSI
+    {:ok, _processing_orders} =
+      Table.list_items(
+        %CustomerOrder{status: "processing"},
+        index_name: "StatusIndex"
+      )
   end
 
   @doc """

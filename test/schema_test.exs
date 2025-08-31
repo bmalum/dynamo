@@ -72,6 +72,48 @@ defmodule Dynamo.SchemaTest do
     end
   end
 
+  defmodule ParentTestItem do
+    use Dynamo.Schema
+
+    item do
+      table_name("parent_test_table")
+
+      field(:parent_id, partition_key: true)
+      field(:name)
+      field(:email, sort_key: true)
+    end
+  end
+
+  defmodule ChildTestItemPrefix do
+    use Dynamo.Schema
+
+    item do
+      table_name("child_test_table")
+
+      field(:parent_id)  # foreign key
+      field(:child_id)
+      field(:description)
+      field(:created_at, sort_key: true)
+
+      belongs_to :parent, ParentTestItem, sk_strategy: :prefix
+    end
+  end
+
+  defmodule ChildTestItemUseDefined do
+    use Dynamo.Schema
+
+    item do
+      table_name("child_test_table_defined")
+
+      field(:parent_id)  # foreign key
+      field(:child_id)
+      field(:description)
+      field(:created_at, sort_key: true)
+
+      belongs_to :parent, ParentTestItem, sk_strategy: :use_defined
+    end
+  end
+
   describe "schema definition" do
     test "defines correct table name" do
       assert TestItem.table_name() == "test_table"
@@ -670,6 +712,215 @@ defmodule Dynamo.SchemaTest do
 
       {:ok, gsi_config} = Dynamo.Schema.validate_gsi_config(item, "TenantIndex")
       assert gsi_config.name == "TenantIndex"
+    end
+  end
+
+  describe "belongs_to definition" do
+    test "defines belongs_to relationships correctly" do
+      relations = ChildTestItemPrefix.belongs_to_relations()
+
+      assert length(relations) == 1
+
+      relation = List.first(relations)
+      assert relation.relation_name == :parent
+      assert relation.parent_module == ParentTestItem
+      assert relation.foreign_key == :parent_id
+      assert relation.sk_strategy == :prefix
+    end
+
+    test "returns empty list when no belongs_to defined" do
+      assert TestItem.belongs_to_relations() == []
+    end
+
+    test "validates different sk_strategy options" do
+      prefix_relations = ChildTestItemPrefix.belongs_to_relations()
+      use_defined_relations = ChildTestItemUseDefined.belongs_to_relations()
+
+      prefix_relation = List.first(prefix_relations)
+      use_defined_relation = List.first(use_defined_relations)
+
+      assert prefix_relation.sk_strategy == :prefix
+      assert use_defined_relation.sk_strategy == :use_defined
+    end
+  end
+
+  describe "belongs_to validation" do
+    test "auto-infers foreign key from parent partition key" do
+      defmodule AutoInferredForeignKey do
+        use Dynamo.Schema
+
+        item do
+          field(:id, partition_key: true)
+          field(:parent_id)  # This matches ParentTestItem's partition key
+          field(:created_at, sort_key: true)
+
+          belongs_to :parent, ParentTestItem, sk_strategy: :prefix
+        end
+      end
+
+      relations = AutoInferredForeignKey.belongs_to_relations()
+      relation = List.first(relations)
+      assert relation.foreign_key == :parent_id  # Auto-inferred
+    end
+
+    test "raises error when auto-inferred foreign_key field does not exist" do
+      assert_raise RuntimeError,
+                   ~r/foreign_key field ':parent_id' does not exist in schema/,
+                   fn ->
+                     defmodule MissingAutoInferredField do
+                       use Dynamo.Schema
+
+                       item do
+                         field(:id, partition_key: true)
+                         # Missing field(:parent_id) - should be auto-inferred
+
+                         belongs_to :parent, ParentTestItem, sk_strategy: :prefix
+                       end
+                     end
+                   end
+    end
+
+    test "raises error when explicit foreign_key field does not exist" do
+      assert_raise RuntimeError,
+                   ~r/foreign_key field ':nonexistent' does not exist in schema/,
+                   fn ->
+                     defmodule InvalidForeignKey do
+                       use Dynamo.Schema
+
+                       item do
+                         field(:id, partition_key: true)
+                         field(:parent_id)
+
+                         belongs_to :parent, ParentTestItem, foreign_key: :nonexistent
+                       end
+                     end
+                   end
+    end
+
+    test "raises error when sk_strategy is invalid" do
+      assert_raise RuntimeError, ~r/sk_strategy must be :prefix or :use_defined/, fn ->
+        defmodule InvalidSkStrategy do
+          use Dynamo.Schema
+
+          item do
+            field(:id, partition_key: true)
+            field(:parent_id)
+
+            belongs_to :parent, ParentTestItem,
+              foreign_key: :parent_id,
+              sk_strategy: :invalid
+          end
+        end
+      end
+    end
+
+    test "allows valid belongs_to with all options" do
+      defmodule ValidBelongsTo do
+        use Dynamo.Schema
+
+        item do
+          field(:id, partition_key: true)
+          field(:parent_id)
+          field(:created_at, sort_key: true)
+
+          belongs_to :parent, ParentTestItem, sk_strategy: :prefix
+        end
+      end
+
+      relations = ValidBelongsTo.belongs_to_relations()
+      assert length(relations) == 1
+
+      relation = List.first(relations)
+      assert relation.relation_name == :parent
+      assert relation.parent_module == ParentTestItem
+      assert relation.foreign_key == :parent_id
+      assert relation.sk_strategy == :prefix
+    end
+  end
+
+  describe "belongs_to key generation" do
+    test "generates partition key using parent format" do
+      child = %ChildTestItemPrefix{
+        parent_id: "parent-123",
+        child_id: "child-456",
+        description: "Test child",
+        created_at: "2024-01-15T10:30:00Z"
+      }
+
+      result = Dynamo.Schema.generate_and_add_partition_key(child)
+      # Should use parent's format: "parenttestitem#parent-123"
+      assert result.pk == "parenttestitem#parent-123"
+    end
+
+    test "generates sort key with prefix strategy" do
+      child = %ChildTestItemPrefix{
+        parent_id: "parent-123",
+        child_id: "child-456",
+        description: "Test child",
+        created_at: "2024-01-15T10:30:00Z"
+      }
+
+      result = Dynamo.Schema.generate_and_add_sort_key(child)
+      # Should prefix with entity name: "childtestitemprefix#2024-01-15T10:30:00Z"
+      assert result.sk == "childtestitemprefix#2024-01-15T10:30:00Z"
+    end
+
+    test "generates sort key with use_defined strategy" do
+      child = %ChildTestItemUseDefined{
+        parent_id: "parent-123",
+        child_id: "child-456",
+        description: "Test child",
+        created_at: "2024-01-15T10:30:00Z"
+      }
+
+      result = Dynamo.Schema.generate_and_add_sort_key(child)
+      # Should use normal sort key generation: "2024-01-15T10:30:00Z"
+      assert result.sk == "2024-01-15T10:30:00Z"
+    end
+
+    test "generates keys with empty foreign key values" do
+      child = %ChildTestItemPrefix{
+        parent_id: nil,
+        created_at: "2024-01-15T10:30:00Z"
+      }
+
+      result =
+        child
+        |> Dynamo.Schema.generate_and_add_partition_key()
+        |> Dynamo.Schema.generate_and_add_sort_key()
+
+      assert result.pk == "parenttestitem#empty"
+      assert result.sk == "childtestitemprefix#2024-01-15T10:30:00Z"
+    end
+
+    test "generates complete keys for both strategies" do
+      prefix_child = %ChildTestItemPrefix{
+        parent_id: "parent-123",
+        created_at: "2024-01-15T10:30:00Z"
+      }
+
+      use_defined_child = %ChildTestItemUseDefined{
+        parent_id: "parent-123",
+        created_at: "2024-01-15T10:30:00Z"
+      }
+
+      prefix_result =
+        prefix_child
+        |> Dynamo.Schema.generate_and_add_partition_key()
+        |> Dynamo.Schema.generate_and_add_sort_key()
+
+      use_defined_result =
+        use_defined_child
+        |> Dynamo.Schema.generate_and_add_partition_key()
+        |> Dynamo.Schema.generate_and_add_sort_key()
+
+      # Both should have same partition key (parent format)
+      assert prefix_result.pk == "parenttestitem#parent-123"
+      assert use_defined_result.pk == "parenttestitem#parent-123"
+
+      # Different sort key strategies
+      assert prefix_result.sk == "childtestitemprefix#2024-01-15T10:30:00Z"
+      assert use_defined_result.sk == "2024-01-15T10:30:00Z"
     end
   end
 end
