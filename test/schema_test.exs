@@ -923,4 +923,58 @@ defmodule Dynamo.SchemaTest do
       assert use_defined_result.sk == "2024-01-15T10:30:00Z"
     end
   end
+
+  describe "belongs_to query handling" do
+    test "detects belongs_to relationships correctly" do
+      # Regular item has no belongs_to relationships
+      regular_relations = TestItem.belongs_to_relations()
+      assert regular_relations == []
+
+      # Child items have belongs_to relationships
+      prefix_relations = ChildTestItemPrefix.belongs_to_relations()
+      assert length(prefix_relations) == 1
+
+      use_defined_relations = ChildTestItemUseDefined.belongs_to_relations()
+      assert length(use_defined_relations) == 1
+    end
+
+    test "generates correct partition key for belongs_to queries" do
+      child = %ChildTestItemPrefix{
+        parent_id: "parent-123",
+        created_at: "2024-01-15T10:30:00Z"
+      }
+
+      belongs_to_config = List.first(ChildTestItemPrefix.belongs_to_relations())
+      pk = Dynamo.Schema.generate_belongs_to_partition_key(child, belongs_to_config)
+
+      # Should use parent's partition key format
+      assert pk == "parenttestitem#parent-123"
+    end
+
+    test "handles prefix strategy for belongs_to queries" do
+      child = %ChildTestItemPrefix{
+        parent_id: "parent-123",
+        created_at: "2024-01-15T10:30:00Z"
+      }
+
+      belongs_to_config = List.first(ChildTestItemPrefix.belongs_to_relations())
+
+      # For prefix strategy, should generate full sort key
+      sk = Dynamo.Schema.generate_belongs_to_sort_key(child, belongs_to_config)
+      assert sk == "childtestitemprefix#2024-01-15T10:30:00Z"
+    end
+
+    test "handles use_defined strategy for belongs_to queries" do
+      child = %ChildTestItemUseDefined{
+        parent_id: "parent-123",
+        created_at: "2024-01-15T10:30:00Z"
+      }
+
+      belongs_to_config = List.first(ChildTestItemUseDefined.belongs_to_relations())
+
+      # For use_defined strategy, should use normal sort key
+      sk = Dynamo.Schema.generate_belongs_to_sort_key(child, belongs_to_config)
+      assert sk == "2024-01-15T10:30:00Z"
+    end
+  end
 end

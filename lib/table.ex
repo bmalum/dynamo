@@ -84,7 +84,7 @@ defmodule Dynamo.Table do
       {:ok, all_users} = Dynamo.Table.parallel_scan(User, segments: 8)
   """
 
-@doc """
+  @doc """
   Puts an item into DynamoDB.
 
   Takes a struct that implements the required DynamoDB schema behavior and writes it to the corresponding table.
@@ -125,23 +125,26 @@ defmodule Dynamo.Table do
       payload = %{"TableName" => table, "Item" => item}
 
       # Add optional parameters if provided
-      payload = if opts[:condition_expression] do
-        Map.put(payload, "ConditionExpression", opts[:condition_expression])
-      else
-        payload
-      end
+      payload =
+        if opts[:condition_expression] do
+          Map.put(payload, "ConditionExpression", opts[:condition_expression])
+        else
+          payload
+        end
 
-      payload = if opts[:expression_attribute_names] do
-        Map.put(payload, "ExpressionAttributeNames", opts[:expression_attribute_names])
-      else
-        payload
-      end
+      payload =
+        if opts[:expression_attribute_names] do
+          Map.put(payload, "ExpressionAttributeNames", opts[:expression_attribute_names])
+        else
+          payload
+        end
 
-      payload = if opts[:expression_attribute_values] do
-        Map.put(payload, "ExpressionAttributeValues", opts[:expression_attribute_values])
-      else
-        payload
-      end
+      payload =
+        if opts[:expression_attribute_values] do
+          Map.put(payload, "ExpressionAttributeValues", opts[:expression_attribute_values])
+        else
+          payload
+        end
 
       case Dynamo.DynamoDB.put_item(client, payload) do
         {:ok, _, _} ->
@@ -233,17 +236,19 @@ defmodule Dynamo.Table do
       # Add optional parameters if provided
       query = if opts[:consistent_read], do: Map.put(query, "ConsistentRead", true), else: query
 
-      query = if opts[:projection_expression] do
-        Map.put(query, "ProjectionExpression", opts[:projection_expression])
-      else
-        query
-      end
+      query =
+        if opts[:projection_expression] do
+          Map.put(query, "ProjectionExpression", opts[:projection_expression])
+        else
+          query
+        end
 
-      query = if opts[:expression_attribute_names] do
-        Map.put(query, "ExpressionAttributeNames", opts[:expression_attribute_names])
-      else
-        query
-      end
+      query =
+        if opts[:expression_attribute_names] do
+          Map.put(query, "ExpressionAttributeNames", opts[:expression_attribute_names])
+        else
+          query
+        end
 
       case Dynamo.DynamoDB.get_item(client, query) do
         {:ok, %{"Item" => item}, _} ->
@@ -323,34 +328,37 @@ defmodule Dynamo.Table do
     sk = options[:sort_key]
 
     # Get configuration from module specified in options or use defaults
-    config = if options[:schema_module] do
-      options[:schema_module].settings()
-    else
-      Dynamo.Config.config()
-    end
+    config =
+      if options[:schema_module] do
+        options[:schema_module].settings()
+      else
+        Dynamo.Config.config()
+      end
 
     # Determine key names and whether to use ExpressionAttributeNames
-    {partition_key_name, sort_key_name, use_expression_attribute_names} = if options[:index_name] do
-      # GSI query - use GSI-specific key names if provided, otherwise use config defaults
-      gsi_pk_name = options[:gsi_partition_key_name] || config[:partition_key_name]
-      gsi_sk_name = options[:gsi_sort_key_name] || config[:sort_key_name]
+    {partition_key_name, sort_key_name, use_expression_attribute_names} =
+      if options[:index_name] do
+        # GSI query - use GSI-specific key names if provided, otherwise use config defaults
+        gsi_pk_name = options[:gsi_partition_key_name] || config[:partition_key_name]
+        gsi_sk_name = options[:gsi_sort_key_name] || config[:sort_key_name]
 
-      # For GSI queries, use ExpressionAttributeNames to avoid reserved word conflicts
-      use_attr_names = options[:gsi_partition_key_name] != nil
-      {gsi_pk_name, gsi_sk_name, use_attr_names}
-    else
-      # Table query - use standard config key names
-      {config[:partition_key_name], config[:sort_key_name], false}
-    end
+        # For GSI queries, use ExpressionAttributeNames to avoid reserved word conflicts
+        use_attr_names = options[:gsi_partition_key_name] != nil
+        {gsi_pk_name, gsi_sk_name, use_attr_names}
+      else
+        # Table query - use standard config key names
+        {config[:partition_key_name], config[:sort_key_name], false}
+      end
 
     # Build partition key query fragment
-    {pk_query_fragment, expression_attribute_names} = if use_expression_attribute_names do
-      # Use ExpressionAttributeNames for GSI queries to avoid reserved word conflicts
-      {"#pk = :pk", %{"#pk" => partition_key_name}}
-    else
-      # Use direct field names for table queries
-      {"#{partition_key_name} = :pk", %{}}
-    end
+    {pk_query_fragment, expression_attribute_names} =
+      if use_expression_attribute_names do
+        # Use ExpressionAttributeNames for GSI queries to avoid reserved word conflicts
+        {"#pk = :pk", %{"#pk" => partition_key_name}}
+      else
+        # Use direct field names for table queries
+        {"#{partition_key_name} = :pk", %{}}
+      end
 
     # Build the base query
     query = %{
@@ -365,152 +373,208 @@ defmodule Dynamo.Table do
     # Add sort key if provided
     {sk, sk_operator, sk_end} =
       case {sk, options[:sk_operator], options[:sk_end]} do
-        {nil, nil, nil} -> {nil, nil, nil}
-        {nil, _op, _end} -> raise Dynamo.Error.new(:validation_error, "Sort key operator provided but sort key is nil")
-        {val, nil, nil} -> {val, :full_match, nil}
-        {val, op, end_val} -> {val, op, end_val}
+        {nil, nil, nil} ->
+          {nil, nil, nil}
+
+        {nil, _op, _end} ->
+          raise Dynamo.Error.new(
+                  :validation_error,
+                  "Sort key operator provided but sort key is nil"
+                )
+
+        {val, nil, nil} ->
+          {val, :full_match, nil}
+
+        {val, op, end_val} ->
+          {val, op, end_val}
       end
 
-    {query, expression_attribute_names} = if sk != nil do
-      # Add the first sort key value
-      query = put_in(query, ["ExpressionAttributeValues", ":sk"], %{"S" => sk})
+    {query, expression_attribute_names} =
+      if sk != nil do
+        # Add the first sort key value
+        query = put_in(query, ["ExpressionAttributeValues", ":sk"], %{"S" => sk})
 
-      # Add the second sort key value if needed for BETWEEN
-      query = if sk_end != nil do
-        put_in(query, ["ExpressionAttributeValues", ":sk_end"], %{"S" => sk_end})
+        # Add the second sort key value if needed for BETWEEN
+        query =
+          if sk_end != nil do
+            put_in(query, ["ExpressionAttributeValues", ":sk_end"], %{"S" => sk_end})
+          else
+            query
+          end
+
+        # Build sort key reference (with or without ExpressionAttributeNames)
+        {sk_ref, updated_attr_names} =
+          if use_expression_attribute_names do
+            {"#sk", Map.put(expression_attribute_names, "#sk", sort_key_name)}
+          else
+            {sort_key_name, expression_attribute_names}
+          end
+
+        # Build the appropriate condition expression based on the operator
+        updated_query =
+          case sk_operator do
+            :full_match ->
+              put_in(
+                query,
+                ["KeyConditionExpression"],
+                "#{pk_query_fragment} AND #{sk_ref} = :sk"
+              )
+
+            :begins_with ->
+              put_in(
+                query,
+                ["KeyConditionExpression"],
+                "#{pk_query_fragment} AND begins_with(#{sk_ref}, :sk)"
+              )
+
+            :gt ->
+              put_in(
+                query,
+                ["KeyConditionExpression"],
+                "#{pk_query_fragment} AND #{sk_ref} > :sk"
+              )
+
+            :lt ->
+              put_in(
+                query,
+                ["KeyConditionExpression"],
+                "#{pk_query_fragment} AND #{sk_ref} < :sk"
+              )
+
+            :gte ->
+              put_in(
+                query,
+                ["KeyConditionExpression"],
+                "#{pk_query_fragment} AND #{sk_ref} >= :sk"
+              )
+
+            :lte ->
+              put_in(
+                query,
+                ["KeyConditionExpression"],
+                "#{pk_query_fragment} AND #{sk_ref} <= :sk"
+              )
+
+            :between ->
+              if sk_end == nil do
+                raise Dynamo.Error.new(
+                        :validation_error,
+                        "BETWEEN operator requires sk_end parameter"
+                      )
+              end
+
+              put_in(
+                query,
+                ["KeyConditionExpression"],
+                "#{pk_query_fragment} AND #{sk_ref} BETWEEN :sk AND :sk_end"
+              )
+
+            _ ->
+              raise Dynamo.Error.new(
+                      :validation_error,
+                      "Unsupported sort key operator: #{inspect(sk_operator)}"
+                    )
+          end
+
+        {updated_query, updated_attr_names}
+      else
+        {query, expression_attribute_names}
+      end
+
+    # Add index name if provided
+    query =
+      if options[:index_name], do: Map.put(query, "IndexName", options[:index_name]), else: query
+
+    # Add filter expression if provided
+    query =
+      if options[:filter_expression],
+        do: Map.put(query, "FilterExpression", options[:filter_expression]),
+        else: query
+
+    # Add projection expression if provided
+    query =
+      if options[:projection_expression],
+        do: Map.put(query, "ProjectionExpression", options[:projection_expression]),
+        else: query
+
+    # Add expression attribute names (merge generated ones with provided ones)
+    query =
+      if map_size(expression_attribute_names) > 0 or options[:expression_attribute_names] do
+        final_attr_names =
+          Map.merge(expression_attribute_names, options[:expression_attribute_names] || %{})
+
+        Map.put(query, "ExpressionAttributeNames", final_attr_names)
       else
         query
       end
 
-      # Build sort key reference (with or without ExpressionAttributeNames)
-      {sk_ref, updated_attr_names} = if use_expression_attribute_names do
-        {"#sk", Map.put(expression_attribute_names, "#sk", sort_key_name)}
-      else
-        {sort_key_name, expression_attribute_names}
-      end
-
-      # Build the appropriate condition expression based on the operator
-      updated_query = case sk_operator do
-        :full_match ->
-          put_in(
-            query,
-            ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sk_ref} = :sk"
-          )
-        :begins_with ->
-          put_in(
-            query,
-            ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND begins_with(#{sk_ref}, :sk)"
-          )
-        :gt ->
-          put_in(
-            query,
-            ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sk_ref} > :sk"
-          )
-        :lt ->
-          put_in(
-            query,
-            ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sk_ref} < :sk"
-          )
-        :gte ->
-          put_in(
-            query,
-            ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sk_ref} >= :sk"
-          )
-        :lte ->
-          put_in(
-            query,
-            ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sk_ref} <= :sk"
-          )
-        :between ->
-          if sk_end == nil do
-            raise Dynamo.Error.new(:validation_error, "BETWEEN operator requires sk_end parameter")
-          end
-          put_in(
-            query,
-            ["KeyConditionExpression"],
-            "#{pk_query_fragment} AND #{sk_ref} BETWEEN :sk AND :sk_end"
-          )
-        _ ->
-          raise Dynamo.Error.new(:validation_error, "Unsupported sort key operator: #{inspect(sk_operator)}")
-      end
-
-      {updated_query, updated_attr_names}
-    else
-      {query, expression_attribute_names}
-    end
-
-    # Add index name if provided
-    query = if options[:index_name], do: Map.put(query, "IndexName", options[:index_name]), else: query
-
-    # Add filter expression if provided
-    query = if options[:filter_expression], do: Map.put(query, "FilterExpression", options[:filter_expression]), else: query
-
-    # Add projection expression if provided
-    query = if options[:projection_expression], do: Map.put(query, "ProjectionExpression", options[:projection_expression]), else: query
-
-    # Add expression attribute names (merge generated ones with provided ones)
-    query = if map_size(expression_attribute_names) > 0 or options[:expression_attribute_names] do
-      final_attr_names = Map.merge(expression_attribute_names, options[:expression_attribute_names] || %{})
-      Map.put(query, "ExpressionAttributeNames", final_attr_names)
-    else
-      query
-    end
-
     # Add any additional expression attribute values if provided
-    query = if options[:expression_attribute_values] do
-      updated_values = Map.merge(query["ExpressionAttributeValues"], options[:expression_attribute_values])
-      Map.put(query, "ExpressionAttributeValues", updated_values)
-    else
-      query
-    end
+    query =
+      if options[:expression_attribute_values] do
+        updated_values =
+          Map.merge(query["ExpressionAttributeValues"], options[:expression_attribute_values])
+
+        Map.put(query, "ExpressionAttributeValues", updated_values)
+      else
+        query
+      end
 
     # Add select if provided
-    query = if options[:select] do
-      select_value = case options[:select] do
-        :all_attributes -> "ALL_ATTRIBUTES"
-        :projected_attributes -> "ALL_PROJECTED_ATTRIBUTES"
-        :count -> "COUNT"
-        :specific_attributes -> "SPECIFIC_ATTRIBUTES"
-        other when is_binary(other) -> other
-        _ -> nil
+    query =
+      if options[:select] do
+        select_value =
+          case options[:select] do
+            :all_attributes -> "ALL_ATTRIBUTES"
+            :projected_attributes -> "ALL_PROJECTED_ATTRIBUTES"
+            :count -> "COUNT"
+            :specific_attributes -> "SPECIFIC_ATTRIBUTES"
+            other when is_binary(other) -> other
+            _ -> nil
+          end
+
+        if select_value, do: Map.put(query, "Select", select_value), else: query
+      else
+        query
       end
-      if select_value, do: Map.put(query, "Select", select_value), else: query
-    else
-      query
-    end
 
     # Add consistent read if provided (but not for GSI queries as they don't support consistent reads)
-    query = if options[:consistent_read] && !options[:index_name] do
-      Map.put(query, "ConsistentRead", true)
-    else
-      query
-    end
+    query =
+      if options[:consistent_read] && !options[:index_name] do
+        Map.put(query, "ConsistentRead", true)
+      else
+        query
+      end
 
     # Add limit if provided in options (not from external limit parameter)
-    query = if options[:limit] && options[:limit] != :infinity, do: Map.put(query, "Limit", options[:limit]), else: query
+    query =
+      if options[:limit] && options[:limit] != :infinity,
+        do: Map.put(query, "Limit", options[:limit]),
+        else: query
 
     # Add exclusive start key for pagination if provided
-    query = if options[:exclusive_start_key], do: Map.put(query, "ExclusiveStartKey", options[:exclusive_start_key]), else: query
+    query =
+      if options[:exclusive_start_key],
+        do: Map.put(query, "ExclusiveStartKey", options[:exclusive_start_key]),
+        else: query
 
     # Add return consumed capacity if provided
-    query = if options[:return_consumed_capacity] do
-      capacity_value = case options[:return_consumed_capacity] do
-        :total -> "TOTAL"
-        :indexes -> "INDEXES"
-        :none -> "NONE"
-        other when is_binary(other) -> other
-        _ -> nil
+    query =
+      if options[:return_consumed_capacity] do
+        capacity_value =
+          case options[:return_consumed_capacity] do
+            :total -> "TOTAL"
+            :indexes -> "INDEXES"
+            :none -> "NONE"
+            other when is_binary(other) -> other
+            _ -> nil
+          end
+
+        if capacity_value,
+          do: Map.put(query, "ReturnConsumedCapacity", capacity_value),
+          else: query
+      else
+        query
       end
-      if capacity_value, do: Map.put(query, "ReturnConsumedCapacity", capacity_value), else: query
-    else
-      query
-    end
 
     query
   end
@@ -546,10 +610,9 @@ defmodule Dynamo.Table do
     query(query, limit, [], nil)
   end
 
-
   defp query(_query, limit, acc, _last_key)
        when limit != :infinity and length(acc) >= limit do
-       {:ok, Enum.take(acc, limit)}
+    {:ok, Enum.take(acc, limit)}
   end
 
   defp query(query, limit, acc, last_key)
@@ -562,7 +625,9 @@ defmodule Dynamo.Table do
 
       {:ok, %{"Items" => items}, _} ->
         case limit do
-          :infinity -> {:ok, acc ++ items}
+          :infinity ->
+            {:ok, acc ++ items}
+
           limit ->
             {:ok, Enum.take(acc ++ items, limit)}
         end
@@ -582,6 +647,11 @@ defmodule Dynamo.Table do
   @doc """
   Lists all items for a given struct's partition key.
 
+  For entities with belongs_to relationships, this will automatically:
+  - Use the parent entity's partition key format
+  - For :prefix strategy, query all items with the entity's prefix using begins_with
+  - For :use_defined strategy, query all items in the partition
+
   ## Parameters
     * `struct` - Struct containing the partition key information
 
@@ -590,17 +660,17 @@ defmodule Dynamo.Table do
     * `{:error, error}` - Error occurred during query, where error is a `Dynamo.Error` struct
 
   ## Examples
+      # Regular entity
       iex> Dynamo.Table.list_items(%User{id: "123"})
       {:ok, [%User{...}, ...]}
+
+      # Entity with belongs_to relationship
+      iex> Dynamo.Table.list_items(%Post{email: "user@example.com"})
+      {:ok, [%Post{...}, ...]}  # Uses User's partition key format
   """
   @spec list_items(struct()) :: {:ok, [struct()]} | {:error, Dynamo.Error.t()}
   def list_items(struct) when is_struct(struct) do
-    pk = Dynamo.Schema.generate_partition_key(struct)
-    table = struct.__struct__.table_name
-
-    build_query(pk, table_name: table, schema_module: struct.__struct__)
-    |> query(:infinity, [], nil)
-    |> decode_res(struct)
+    list_items(struct, [])
   end
 
   @doc """
@@ -679,10 +749,73 @@ defmodule Dynamo.Table do
 
   # Helper function for table queries (existing logic)
   defp query_table(struct, options) do
-    pk = Dynamo.Schema.generate_partition_key(struct)
+    belongs_to_relations = struct.__struct__.belongs_to_relations()
+
+    case belongs_to_relations do
+      [] ->
+        # No belongs_to relationships, use normal partition key generation
+        pk = Dynamo.Schema.generate_partition_key(struct)
+        sk = if options[:sk_operator], do: options[:sort_key], else: nil
+
+        table = struct.__struct__.table_name()
+
+        opts =
+          [table_name: table, limit: :infinity, schema_module: struct.__struct__]
+          |> Keyword.merge(options)
+          |> Keyword.put(:sort_key, sk)
+
+        build_query(pk, opts)
+        |> query(opts[:limit], [], nil)
+        |> decode_res(struct)
+
+      [belongs_to_config | _] ->
+        # Has belongs_to relationship, use parent's partition key format
+        query_belongs_to_table(struct, belongs_to_config, options)
+    end
+  end
+
+  # Helper function for querying belongs_to relationships
+  defp query_belongs_to_table(struct, belongs_to_config, options) do
+    # Generate partition key using parent's format
+    pk = Dynamo.Schema.generate_belongs_to_partition_key(struct, belongs_to_config)
+
+    # Handle sort key based on strategy and options
+    {sk, updated_options} =
+      case {belongs_to_config.sk_strategy, options[:sk_operator]} do
+        {:prefix, nil} ->
+          # No sort key operator, query all items with this entity's prefix
+          entity_name =
+            struct.__struct__
+            |> Atom.to_string()
+            |> String.split(".")
+            |> List.last()
+            |> String.downcase()
+
+          # Use begins_with to find all items with this entity's prefix
+          {entity_name, Keyword.merge(options, sk_operator: :begins_with)}
+
+        {:prefix, _operator} ->
+          # Sort key operator provided, generate the full sort key
+          sk = Dynamo.Schema.generate_belongs_to_sort_key(struct, belongs_to_config)
+          {sk, options}
+
+        {:use_defined, nil} ->
+          # No sort key operator, don't add sort key constraint
+          {nil, options}
+
+        {:use_defined, _operator} ->
+          # Sort key operator provided, generate the sort key
+          sk = Dynamo.Schema.generate_belongs_to_sort_key(struct, belongs_to_config)
+          {sk, options}
+      end
+
     table = struct.__struct__.table_name()
-    opts = [table_name: table, limit: :infinity, schema_module: struct.__struct__]
-    |> Keyword.merge(options)
+
+    opts =
+      [table_name: table, limit: :infinity, schema_module: struct.__struct__]
+      |> Keyword.merge(updated_options)
+      |> Keyword.put(:sort_key, sk)
+
     build_query(pk, opts)
     |> query(opts[:limit], [], nil)
     |> decode_res(struct)
@@ -695,31 +828,36 @@ defmodule Dynamo.Table do
 
     # Validate GSI-specific options
     with :ok <- validate_gsi_options(options),
-         {:ok, gsi_config} <- Dynamo.Schema.validate_gsi_config(struct, index_name, requires_sort_key) do
+         {:ok, gsi_config} <-
+           Dynamo.Schema.validate_gsi_config(struct, index_name, requires_sort_key) do
       # Generate GSI-specific partition and sort keys
       gsi_pk = Dynamo.Schema.generate_gsi_partition_key(struct, gsi_config)
       gsi_sk = Dynamo.Schema.generate_gsi_sort_key(struct, gsi_config)
 
       # Get GSI key names - use the actual field names for the GSI
       gsi_partition_key_name = Atom.to_string(gsi_config.partition_key)
-      gsi_sort_key_name = if gsi_config.sort_key, do: Atom.to_string(gsi_config.sort_key), else: nil
+
+      gsi_sort_key_name =
+        if gsi_config.sort_key, do: Atom.to_string(gsi_config.sort_key), else: nil
 
       # Build query options with GSI keys and key names
       table = struct.__struct__.table_name()
-      opts = [
-        table_name: table,
-        limit: :infinity,
-        schema_module: struct.__struct__,
-        index_name: index_name,
-        sort_key: gsi_sk,
-        gsi_partition_key_name: gsi_partition_key_name,
-        gsi_sort_key_name: gsi_sort_key_name
-      ]
-      |> Keyword.merge(options)
+
+      opts =
+        [
+          table_name: table,
+          limit: :infinity,
+          schema_module: struct.__struct__,
+          index_name: index_name,
+          sort_key: gsi_sk,
+          gsi_partition_key_name: gsi_partition_key_name,
+          gsi_sort_key_name: gsi_sort_key_name
+        ]
+        |> Keyword.merge(options)
 
       # Build and execute query
       build_query(gsi_pk, opts)
-      |> IO.inspect
+      |> IO.inspect()
       |> query(opts[:limit], [], nil)
       |> decode_res(struct)
     else
@@ -731,8 +869,11 @@ defmodule Dynamo.Table do
   # Validate GSI-specific query options
   defp validate_gsi_options(options) do
     if options[:consistent_read] do
-      {:error, Dynamo.Error.new(:validation_error,
-        "Consistent reads are not supported for Global Secondary Index queries")}
+      {:error,
+       Dynamo.Error.new(
+         :validation_error,
+         "Consistent reads are not supported for Global Secondary Index queries"
+       )}
     else
       :ok
     end
@@ -784,14 +925,16 @@ defmodule Dynamo.Table do
     end)
 
     # Prepare items through before_write hook
-    prepared_items = Enum.map(items, fn item ->
-      item.__struct__.before_write(item)
-    end)
+    prepared_items =
+      Enum.map(items, fn item ->
+        item.__struct__.before_write(item)
+      end)
 
     # Build write request items
-    write_requests = Enum.map(prepared_items, fn item ->
-      %{"PutRequest" => %{"Item" => item}}
-    end)
+    write_requests =
+      Enum.map(prepared_items, fn item ->
+        %{"PutRequest" => %{"Item" => item}}
+      end)
 
     # Split into chunks of 25 (AWS limit)
     chunked_requests = chunk_requests(write_requests, 25)
@@ -816,7 +959,8 @@ defmodule Dynamo.Table do
         }
 
         case Dynamo.DynamoDB.batch_write_item(Dynamo.AWS.client(), batch_request) do
-          {:ok, %{"UnprocessedItems" => %{^table_name => unprocessed}} = _response, _context} when unprocessed != [] ->
+          {:ok, %{"UnprocessedItems" => %{^table_name => unprocessed}} = _response, _context}
+          when unprocessed != [] ->
             # Some items weren't processed - add them to unprocessed list
             {processed_count + (length(chunk) - length(unprocessed)),
              unprocessed_items ++ unprocessed}
@@ -845,7 +989,9 @@ defmodule Dynamo.Table do
     # Decode unprocessed items back to their original struct format
     decoded_unprocessed =
       case unprocessed do
-        [] -> []
+        [] ->
+          []
+
         items ->
           # Extract actual items from PutRequest wrappers
           Enum.map(items, fn %{"PutRequest" => %{"Item" => item}} ->
@@ -853,10 +999,11 @@ defmodule Dynamo.Table do
           end)
       end
 
-    {:ok, %{
-      processed_items: result,
-      unprocessed_items: decoded_unprocessed
-    }}
+    {:ok,
+     %{
+       processed_items: result,
+       unprocessed_items: decoded_unprocessed
+     }}
   end
 
   @doc """
@@ -895,9 +1042,9 @@ defmodule Dynamo.Table do
       {:ok, [%User{...}, ...]}
   """
   @spec parallel_scan(module(), keyword()) ::
-    {:ok, [struct()]} |
-    {:ok, %{items: [struct()], partial: boolean(), errors: [any()]}} |
-    {:error, Dynamo.Error.t()}
+          {:ok, [struct()]}
+          | {:ok, %{items: [struct()], partial: boolean(), errors: [any()]}}
+          | {:error, Dynamo.Error.t()}
   def parallel_scan(schema_module, options \\ []) do
     table = schema_module.table_name()
     segments = options[:segments] || 4
@@ -911,31 +1058,35 @@ defmodule Dynamo.Table do
     }
 
     # Add optional parameters if provided
-    base_params = if options[:filter_expression] do
-      Map.put(base_params, "FilterExpression", options[:filter_expression])
-    else
-      base_params
-    end
+    base_params =
+      if options[:filter_expression] do
+        Map.put(base_params, "FilterExpression", options[:filter_expression])
+      else
+        base_params
+      end
 
-    base_params = if options[:projection_expression] do
-      Map.put(base_params, "ProjectionExpression", options[:projection_expression])
-    else
-      base_params
-    end
+    base_params =
+      if options[:projection_expression] do
+        Map.put(base_params, "ProjectionExpression", options[:projection_expression])
+      else
+        base_params
+      end
 
     # Add expression attribute values if provided
-    base_params = if options[:expression_attribute_values] do
-      Map.put(base_params, "ExpressionAttributeValues", options[:expression_attribute_values])
-    else
-      base_params
-    end
+    base_params =
+      if options[:expression_attribute_values] do
+        Map.put(base_params, "ExpressionAttributeValues", options[:expression_attribute_values])
+      else
+        base_params
+      end
 
     # Add expression attribute names if provided
-    base_params = if options[:expression_attribute_names] do
-      Map.put(base_params, "ExpressionAttributeNames", options[:expression_attribute_names])
-    else
-      base_params
-    end
+    base_params =
+      if options[:expression_attribute_names] do
+        Map.put(base_params, "ExpressionAttributeNames", options[:expression_attribute_names])
+      else
+        base_params
+      end
 
     # Create a range of segment indices
     segment_indices = 0..(segments - 1)
@@ -954,8 +1105,10 @@ defmodule Dynamo.Table do
       |> Enum.reduce({[], []}, fn
         {:ok, {:ok, items}}, {acc_items, acc_errors} ->
           {acc_items ++ items, acc_errors}
+
         {:ok, {:error, error}}, {acc_items, acc_errors} ->
           {acc_items, [error | acc_errors]}
+
         {:exit, reason}, {acc_items, acc_errors} ->
           {acc_items, [{:segment_error, reason} | acc_errors]}
       end)
@@ -971,11 +1124,13 @@ defmodule Dynamo.Table do
         # Some segments failed but we have partial results
         items_with_limit = if limit != :infinity, do: Enum.take(items, limit), else: items
         decoded_items = Dynamo.Helper.decode_item(items_with_limit, as: schema_module)
-        {:ok, %{
-          items: decoded_items,
-          partial: true,
-          errors: errors
-        }}
+
+        {:ok,
+         %{
+           items: decoded_items,
+           partial: true,
+           errors: errors
+         }}
 
       {_items, errors} when length(errors) == segments ->
         # All segments failed
@@ -986,7 +1141,8 @@ defmodule Dynamo.Table do
   # Helper function to scan a segment
   defp scan_segment(base_params, segment, total_segments, limit) do
     # Add segment information to the parameters
-    segment_params = base_params
+    segment_params =
+      base_params
       |> Map.put("Segment", segment)
       |> Map.put("TotalSegments", total_segments)
 
@@ -1081,28 +1237,35 @@ defmodule Dynamo.Table do
       }
 
       # Add sort key if available
-      payload = if sk != nil, do: put_in(payload, ["Key", sort_key_name], %{"S" => sk}), else: payload
+      payload =
+        if sk != nil, do: put_in(payload, ["Key", sort_key_name], %{"S" => sk}), else: payload
 
       # Add optional parameters if provided
-      payload = if opts[:return_values], do: Map.put(payload, "ReturnValues", opts[:return_values]), else: payload
+      payload =
+        if opts[:return_values],
+          do: Map.put(payload, "ReturnValues", opts[:return_values]),
+          else: payload
 
-      payload = if opts[:condition_expression] do
-        Map.put(payload, "ConditionExpression", opts[:condition_expression])
-      else
-        payload
-      end
+      payload =
+        if opts[:condition_expression] do
+          Map.put(payload, "ConditionExpression", opts[:condition_expression])
+        else
+          payload
+        end
 
-      payload = if opts[:expression_attribute_names] do
-        Map.put(payload, "ExpressionAttributeNames", opts[:expression_attribute_names])
-      else
-        payload
-      end
+      payload =
+        if opts[:expression_attribute_names] do
+          Map.put(payload, "ExpressionAttributeNames", opts[:expression_attribute_names])
+        else
+          payload
+        end
 
-      payload = if opts[:expression_attribute_values] do
-        Map.put(payload, "ExpressionAttributeValues", opts[:expression_attribute_values])
-      else
-        payload
-      end
+      payload =
+        if opts[:expression_attribute_values] do
+          Map.put(payload, "ExpressionAttributeValues", opts[:expression_attribute_values])
+        else
+          payload
+        end
 
       case Dynamo.DynamoDB.delete_item(client, payload) do
         {:ok, %{"Attributes" => attributes}, _} ->
@@ -1168,8 +1331,8 @@ defmodule Dynamo.Table do
       {:ok, %{items: [%User{...}, ...], last_evaluated_key: %{...}}}
   """
   @spec scan(module(), keyword()) ::
-    {:ok, %{items: [struct()], last_evaluated_key: map() | nil}} |
-    {:error, Dynamo.Error.t()}
+          {:ok, %{items: [struct()], last_evaluated_key: map() | nil}}
+          | {:error, Dynamo.Error.t()}
   def scan(schema_module, options \\ []) do
     table = schema_module.table_name()
     client = options[:client] || Dynamo.AWS.client()
@@ -1180,39 +1343,45 @@ defmodule Dynamo.Table do
     }
 
     # Add optional parameters if provided
-    params = if options[:filter_expression] do
-      Map.put(params, "FilterExpression", options[:filter_expression])
-    else
-      params
-    end
+    params =
+      if options[:filter_expression] do
+        Map.put(params, "FilterExpression", options[:filter_expression])
+      else
+        params
+      end
 
-    params = if options[:projection_expression] do
-      Map.put(params, "ProjectionExpression", options[:projection_expression])
-    else
-      params
-    end
+    params =
+      if options[:projection_expression] do
+        Map.put(params, "ProjectionExpression", options[:projection_expression])
+      else
+        params
+      end
 
-    params = if options[:expression_attribute_values] do
-      Map.put(params, "ExpressionAttributeValues", options[:expression_attribute_values])
-    else
-      params
-    end
+    params =
+      if options[:expression_attribute_values] do
+        Map.put(params, "ExpressionAttributeValues", options[:expression_attribute_values])
+      else
+        params
+      end
 
-    params = if options[:expression_attribute_names] do
-      Map.put(params, "ExpressionAttributeNames", options[:expression_attribute_names])
-    else
-      params
-    end
+    params =
+      if options[:expression_attribute_names] do
+        Map.put(params, "ExpressionAttributeNames", options[:expression_attribute_names])
+      else
+        params
+      end
 
-    params = if options[:consistent_read], do: Map.put(params, "ConsistentRead", true), else: params
+    params =
+      if options[:consistent_read], do: Map.put(params, "ConsistentRead", true), else: params
 
     params = if options[:limit], do: Map.put(params, "Limit", options[:limit]), else: params
 
-    params = if options[:exclusive_start_key] do
-      Map.put(params, "ExclusiveStartKey", options[:exclusive_start_key])
-    else
-      params
-    end
+    params =
+      if options[:exclusive_start_key] do
+        Map.put(params, "ExclusiveStartKey", options[:exclusive_start_key])
+      else
+        params
+      end
 
     case Dynamo.DynamoDB.scan(client, params) do
       {:ok, %{"Items" => items, "LastEvaluatedKey" => last_evaluated_key}, _} ->
@@ -1271,7 +1440,8 @@ defmodule Dynamo.Table do
       ...> )
       {:ok, nil}
   """
-  @spec update_item(struct(), map(), keyword()) :: {:ok, struct() | nil} | {:error, Dynamo.Error.t()}
+  @spec update_item(struct(), map(), keyword()) ::
+          {:ok, struct() | nil} | {:error, Dynamo.Error.t()}
   def update_item(struct, updates, opts \\ []) when is_struct(struct) do
     # Validate struct has required fields
     if struct.__struct__.partition_key() == [] do
@@ -1295,7 +1465,8 @@ defmodule Dynamo.Table do
       }
 
       # Add sort key if available
-      payload = if sk != nil, do: put_in(payload, ["Key", sort_key_name], %{"S" => sk}), else: payload
+      payload =
+        if sk != nil, do: put_in(payload, ["Key", sort_key_name], %{"S" => sk}), else: payload
 
       # Generate update expression or use the provided one
       {update_expression, expr_attr_names, expr_attr_values} =
@@ -1313,48 +1484,60 @@ defmodule Dynamo.Table do
       payload = Map.put(payload, "UpdateExpression", update_expression)
 
       # Add expression attribute names if any
-      payload = if map_size(expr_attr_names) > 0 do
-        Map.put(payload, "ExpressionAttributeNames", expr_attr_names)
-      else
-        payload
-      end
+      payload =
+        if map_size(expr_attr_names) > 0 do
+          Map.put(payload, "ExpressionAttributeNames", expr_attr_names)
+        else
+          payload
+        end
 
       # Add expression attribute values if any
-      payload = if map_size(expr_attr_values) > 0 do
-        Map.put(payload, "ExpressionAttributeValues", expr_attr_values)
-      else
-        payload
-      end
+      payload =
+        if map_size(expr_attr_values) > 0 do
+          Map.put(payload, "ExpressionAttributeValues", expr_attr_values)
+        else
+          payload
+        end
 
       # Add optional parameters if provided
-      payload = if opts[:return_values], do: Map.put(payload, "ReturnValues", opts[:return_values]), else: payload
+      payload =
+        if opts[:return_values],
+          do: Map.put(payload, "ReturnValues", opts[:return_values]),
+          else: payload
 
-      payload = if opts[:condition_expression] do
-        Map.put(payload, "ConditionExpression", opts[:condition_expression])
-      else
-        payload
-      end
+      payload =
+        if opts[:condition_expression] do
+          Map.put(payload, "ConditionExpression", opts[:condition_expression])
+        else
+          payload
+        end
 
       # Merge any additional expression attribute names and values
-      payload = if opts[:expression_attribute_names] && !opts[:update_expression] do
-        updated_names = Map.merge(
-          payload["ExpressionAttributeNames"] || %{},
-          opts[:expression_attribute_names]
-        )
-        Map.put(payload, "ExpressionAttributeNames", updated_names)
-      else
-        payload
-      end
+      payload =
+        if opts[:expression_attribute_names] && !opts[:update_expression] do
+          updated_names =
+            Map.merge(
+              payload["ExpressionAttributeNames"] || %{},
+              opts[:expression_attribute_names]
+            )
 
-      payload = if opts[:expression_attribute_values] && !opts[:update_expression] do
-        updated_values = Map.merge(
-          payload["ExpressionAttributeValues"] || %{},
-          opts[:expression_attribute_values]
-        )
-        Map.put(payload, "ExpressionAttributeValues", updated_values)
-      else
-        payload
-      end
+          Map.put(payload, "ExpressionAttributeNames", updated_names)
+        else
+          payload
+        end
+
+      payload =
+        if opts[:expression_attribute_values] && !opts[:update_expression] do
+          updated_values =
+            Map.merge(
+              payload["ExpressionAttributeValues"] || %{},
+              opts[:expression_attribute_values]
+            )
+
+          Map.put(payload, "ExpressionAttributeValues", updated_values)
+        else
+          payload
+        end
 
       case Dynamo.DynamoDB.update_item(client, payload) do
         {:ok, %{"Attributes" => attributes}, _} ->
@@ -1405,16 +1588,36 @@ defmodule Dynamo.Table do
   # Helper to encode attribute values for update expressions
   defp encode_attribute_value(value) do
     case value do
-      %{"S" => _} -> value
-      %{"N" => _} -> value
-      %{"B" => _} -> value
-      %{"BOOL" => _} -> value
-      %{"NULL" => _} -> value
-      %{"M" => _} -> value
-      %{"L" => _} -> value
-      %{"SS" => _} -> value
-      %{"NS" => _} -> value
-      %{"BS" => _} -> value
+      %{"S" => _} ->
+        value
+
+      %{"N" => _} ->
+        value
+
+      %{"B" => _} ->
+        value
+
+      %{"BOOL" => _} ->
+        value
+
+      %{"NULL" => _} ->
+        value
+
+      %{"M" => _} ->
+        value
+
+      %{"L" => _} ->
+        value
+
+      %{"SS" => _} ->
+        value
+
+      %{"NS" => _} ->
+        value
+
+      %{"BS" => _} ->
+        value
+
       _ ->
         # Need to encode it
         Dynamo.Encoder.encode(value)
@@ -1472,41 +1675,45 @@ defmodule Dynamo.Table do
     end)
 
     # Generate keys for each item
-    keys = Enum.map(items, fn item ->
-      pk = Dynamo.Schema.generate_partition_key(item)
-      sk = Dynamo.Schema.generate_sort_key(item)
+    keys =
+      Enum.map(items, fn item ->
+        pk = Dynamo.Schema.generate_partition_key(item)
+        sk = Dynamo.Schema.generate_sort_key(item)
 
-      key = %{
-        partition_key_name => %{"S" => pk}
-      }
+        key = %{
+          partition_key_name => %{"S" => pk}
+        }
 
-      # Add sort key if available
-      if sk != nil, do: Map.put(key, sort_key_name, %{"S" => sk}), else: key
-    end)
+        # Add sort key if available
+        if sk != nil, do: Map.put(key, sort_key_name, %{"S" => sk}), else: key
+      end)
 
     # Build the table attributes
     table_attrs = %{}
 
     # Add consistent read if specified
-    table_attrs = if opts[:consistent_read] do
-      Map.put(table_attrs, "ConsistentRead", true)
-    else
-      table_attrs
-    end
+    table_attrs =
+      if opts[:consistent_read] do
+        Map.put(table_attrs, "ConsistentRead", true)
+      else
+        table_attrs
+      end
 
     # Add projection expression if specified
-    table_attrs = if opts[:projection_expression] do
-      Map.put(table_attrs, "ProjectionExpression", opts[:projection_expression])
-    else
-      table_attrs
-    end
+    table_attrs =
+      if opts[:projection_expression] do
+        Map.put(table_attrs, "ProjectionExpression", opts[:projection_expression])
+      else
+        table_attrs
+      end
 
     # Add expression attribute names if specified
-    table_attrs = if opts[:expression_attribute_names] do
-      Map.put(table_attrs, "ExpressionAttributeNames", opts[:expression_attribute_names])
-    else
-      table_attrs
-    end
+    table_attrs =
+      if opts[:expression_attribute_names] do
+        Map.put(table_attrs, "ExpressionAttributeNames", opts[:expression_attribute_names])
+      else
+        table_attrs
+      end
 
     # Split keys into chunks of 100 (AWS limit)
     chunked_keys = Enum.chunk_every(keys, 100)
@@ -1521,60 +1728,70 @@ defmodule Dynamo.Table do
   # Process batch get chunks
   defp process_batch_get(chunks, table_name, table_attrs, module, client, _original_keys) do
     # Process chunks sequentially, collecting results
-    result = Enum.reduce_while(chunks, {[], []}, fn chunk, {items_acc, unprocessed_acc} ->
-      # Create the batch get request
-      keys_list = %{"Keys" => chunk}
-      table_request = Map.merge(keys_list, table_attrs)
+    result =
+      Enum.reduce_while(chunks, {[], []}, fn chunk, {items_acc, unprocessed_acc} ->
+        # Create the batch get request
+        keys_list = %{"Keys" => chunk}
+        table_request = Map.merge(keys_list, table_attrs)
 
-      batch_request = %{
-        "RequestItems" => %{
-          table_name => table_request
+        batch_request = %{
+          "RequestItems" => %{
+            table_name => table_request
+          }
         }
-      }
 
-      case Dynamo.DynamoDB.batch_get_item(client, batch_request) do
-        {:ok, %{"Responses" => %{^table_name => items}, "UnprocessedKeys" => %{^table_name => %{"Keys" => unprocessed}}}, _} ->
-          # We have items and some unprocessed keys
-          {:cont, {items_acc ++ items, unprocessed_acc ++ unprocessed}}
+        case Dynamo.DynamoDB.batch_get_item(client, batch_request) do
+          {:ok,
+           %{
+             "Responses" => %{^table_name => items},
+             "UnprocessedKeys" => %{^table_name => %{"Keys" => unprocessed}}
+           }, _} ->
+            # We have items and some unprocessed keys
+            {:cont, {items_acc ++ items, unprocessed_acc ++ unprocessed}}
 
-        {:ok, %{"Responses" => %{^table_name => items}, "UnprocessedKeys" => %{}}, _} ->
-          # All keys were processed
-          {:cont, {items_acc ++ items, unprocessed_acc}}
+          {:ok, %{"Responses" => %{^table_name => items}, "UnprocessedKeys" => %{}}, _} ->
+            # All keys were processed
+            {:cont, {items_acc ++ items, unprocessed_acc}}
 
-        {:ok, %{"Responses" => %{^table_name => items}}, _} ->
-          # All keys were processed (no UnprocessedKeys in response)
-          {:cont, {items_acc ++ items, unprocessed_acc}}
+          {:ok, %{"Responses" => %{^table_name => items}}, _} ->
+            # All keys were processed (no UnprocessedKeys in response)
+            {:cont, {items_acc ++ items, unprocessed_acc}}
 
-        {:ok, %{"Responses" => %{}}, _} ->
-          # No items found for any key
-          {:cont, {items_acc, unprocessed_acc}}
+          {:ok, %{"Responses" => %{}}, _} ->
+            # No items found for any key
+            {:cont, {items_acc, unprocessed_acc}}
 
-        {:error, %{"__type" => type, "Message" => message}} ->
-          # Error processing this chunk - halt processing and return error
-          {:halt, {:error, Dynamo.Error.new(:aws_error, "DynamoDB error: #{message}", %{type: type})}}
+          {:error, %{"__type" => type, "Message" => message}} ->
+            # Error processing this chunk - halt processing and return error
+            {:halt,
+             {:error, Dynamo.Error.new(:aws_error, "DynamoDB error: #{message}", %{type: type})}}
 
-        {:error, error} ->
-          # Error processing this chunk
-          {:halt, {:error, Dynamo.Error.new(:aws_error, "AWS error occurred", error)}}
+          {:error, error} ->
+            # Error processing this chunk
+            {:halt, {:error, Dynamo.Error.new(:aws_error, "AWS error occurred", error)}}
 
-        error ->
-          # Unknown error
-          {:halt, {:error, Dynamo.Error.new(:unknown_error, "Unknown error during batch_get_item", error)}}
-      end
-    end)
+          error ->
+            # Unknown error
+            {:halt,
+             {:error,
+              Dynamo.Error.new(:unknown_error, "Unknown error during batch_get_item", error)}}
+        end
+      end)
 
     case result do
       {:error, _} = error ->
         error
+
       {retrieved_items, unprocessed} ->
         # Decode items back to their original struct format
         decoded_items = Dynamo.Helper.decode_item(retrieved_items, as: module)
 
         # Return retrieved items and unprocessed keys (empty if all processed)
-        {:ok, %{
-          items: decoded_items,
-          unprocessed_keys: unprocessed
-        }}
+        {:ok,
+         %{
+           items: decoded_items,
+           unprocessed_keys: unprocessed
+         }}
     end
   end
 end
