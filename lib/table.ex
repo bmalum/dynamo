@@ -755,6 +755,8 @@ defmodule Dynamo.Table do
       [] ->
         # No belongs_to relationships, use normal partition key generation
         pk = Dynamo.Schema.generate_partition_key(struct)
+        # Only set sort_key if sk_operator is provided, otherwise leave it nil
+        # This ensures we don't add sort key conditions when querying all items with a PK
         sk = if options[:sk_operator], do: options[:sort_key], else: nil
 
         table = struct.__struct__.table_name()
@@ -857,7 +859,6 @@ defmodule Dynamo.Table do
 
       # Build and execute query
       build_query(gsi_pk, opts)
-      |> IO.inspect()
       |> query(opts[:limit], [], nil)
       |> decode_res(struct)
     else
