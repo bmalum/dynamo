@@ -909,3 +909,74 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Debugging with Logging
+
+Dynamo provides built-in logging functionality to help debug DynamoDB operations. You can enable logging to see all queries sent to DynamoDB in a formatted output.
+
+### Enabling Logging
+
+To enable DynamoDB query logging, use the `Dynamo.Logger` module:
+
+```elixir
+# Enable logging
+Dynamo.Logger.enable()
+
+# Perform operations - queries will be logged to stdout
+{:ok, user} = MyApp.User.get_item(%MyApp.User{id: "user-123", email: "john@example.com"})
+
+# Disable logging
+Dynamo.Logger.disable()
+```
+
+### Log Output Format
+
+When logging is enabled, each DynamoDB operation will be logged in JSON format with the following structure:
+
+```json
+{
+  "timestamp": "2023-06-15T10:30:45.123456Z",
+  "operation": "GetItem",
+  "table": "users",
+  "payload": {
+    "TableName": "users",
+    "Key": {
+      "pk": {"S": "user#user-123"},
+      "sk": {"S": "user#john@example.com"}
+    }
+  },
+  "response": {
+    "Item": {
+      "pk": {"S": "user#user-123"},
+      "sk": {"S": "user#john@example.com"},
+      "id": {"S": "user-123"},
+      "email": {"S": "john@example.com"},
+      "name": {"S": "John Doe"}
+    }
+  }
+}
+```
+
+### Checking Logging Status
+
+You can check if logging is currently enabled:
+
+```elixir
+# Check if logging is enabled
+if Dynamo.Logger.enabled?() do
+  IO.puts("DynamoDB logging is enabled")
+else
+  IO.puts("DynamoDB logging is disabled")
+end
+```
+
+### Use Cases
+
+Logging is particularly useful for:
+- Debugging complex query issues
+- Understanding the exact payloads sent to DynamoDB
+- Verifying key generation is working correctly
+- Performance analysis of DynamoDB operations
+- Troubleshooting in development environments
+
+Note that logging should typically be disabled in production environments to avoid performance overhead and excessive log output.

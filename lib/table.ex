@@ -213,8 +213,24 @@ defmodule Dynamo.Table do
     if struct.__struct__.partition_key() == [] do
       {:error, Dynamo.Error.new(:validation_error, "Struct must have a partition key defined")}
     else
-      pk = Dynamo.Schema.generate_partition_key(struct)
-      sk = Dynamo.Schema.generate_sort_key(struct)
+      # Check if struct has belongs_to relationships
+      belongs_to_relations = struct.__struct__.belongs_to_relations()
+
+      {pk, sk} =
+        case belongs_to_relations do
+          [] ->
+            # No belongs_to relationships, use normal key generation
+            pk = Dynamo.Schema.generate_partition_key(struct)
+            sk = Dynamo.Schema.generate_sort_key(struct)
+            {pk, sk}
+
+          [belongs_to_config | _] ->
+            # Has belongs_to relationship, use parent's key format
+            pk = Dynamo.Schema.generate_belongs_to_partition_key(struct, belongs_to_config)
+            sk = Dynamo.Schema.generate_belongs_to_sort_key(struct, belongs_to_config)
+            {pk, sk}
+        end
+
       table = struct.__struct__.table_name
       config = struct.__struct__.settings()
       client = opts[:client] || Dynamo.AWS.client()
@@ -793,8 +809,13 @@ defmodule Dynamo.Table do
             |> List.last()
             |> String.downcase()
 
+          # Get the separator from config
+          config = struct.__struct__.settings()
+          separator = config[:key_separator]
+
           # Use begins_with to find all items with this entity's prefix
-          {entity_name, Keyword.merge(options, sk_operator: :begins_with)}
+          # Include the separator to match the actual sort key format
+          {"#{entity_name}#{separator}", Keyword.merge(options, sk_operator: :begins_with)}
 
         {:prefix, _operator} ->
           # Sort key operator provided, generate the full sort key

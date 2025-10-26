@@ -195,7 +195,7 @@ defmodule Dynamo.Schema do
 
       def table_name, do: @table_name
       def partition_key, do: @partition_key |> List.flatten()
-      def sort_key, do: @sort_key |> List.flatten()
+      def sort_key, do: @sort_key |> List.flatten() |> Enum.reverse()
       def fields, do: @fields
       def global_secondary_indexes, do: @global_secondary_indexes || []
       def belongs_to_relations, do: @belongs_to_relations || []
@@ -227,20 +227,30 @@ defmodule Dynamo.Schema do
     String representing the partition key using parent's format
   """
   def generate_belongs_to_partition_key(arg, belongs_to_config) do
-    config = arg.__struct__.settings()
-    separator = config[:key_separator]
-
-    # Get the parent module name for the partition key prefix
-    parent_module = belongs_to_config.parent_module
-    parent_name = parent_module |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
-
     # Get the foreign key value
     foreign_key_field = belongs_to_config.foreign_key
     foreign_key_value = Map.get(arg, foreign_key_field, "empty")
     foreign_key_value = if foreign_key_value == nil, do: "empty", else: foreign_key_value
 
-    # Generate partition key using parent's format: parent_name#foreign_key_value
-    "#{parent_name}#{separator}#{foreign_key_value}"
+    # Create a temporary struct with the parent's partition key field populated
+    # with the foreign key value to generate the correct partition key format
+    parent_module = belongs_to_config.parent_module
+    parent_partition_keys = parent_module.partition_key()
+
+    # Create a map with the parent's partition key fields populated with the foreign key value
+    parent_key_values =
+      parent_partition_keys
+      |> Enum.map(fn key -> {key, foreign_key_value} end)
+      |> Enum.into(%{})
+
+    # Create a temporary instance of the parent struct with the foreign key value
+    # This allows us to use the parent's normal partition key generation logic
+    parent_struct =
+      parent_module
+      |> struct(parent_key_values)
+
+    # Generate partition key using parent's normal generation logic
+    generate_partition_key(parent_struct)
   end
 
   @doc """
