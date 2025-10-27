@@ -276,22 +276,31 @@ defmodule Dynamo.Schema do
         # Prefix with entity name
         entity_name = arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
 
-        # Generate the normal sort key
+        # Generate the sort key parts, stopping at the first nil/unset field
         sort_key_parts = arg.__struct__.sort_key()
-        |> Enum.map(fn elm ->
-          field_value = Map.get(arg, elm, "empty")
-          field_value = if field_value == nil, do: "empty", else: field_value
-
-          if config[:prefix_sort_key] do
-            [Atom.to_string(elm), field_value]
+        |> Enum.reduce_while([], fn elm, acc ->
+          field_value = Map.get(arg, elm)
+          # Stop if we hit a nil or missing field
+          if field_value == nil do
+            {:halt, acc}
           else
-            [field_value]
+            # Add field name and value if prefix_sort_key is true
+            parts = if config[:prefix_sort_key] do
+              [Atom.to_string(elm), field_value]
+            else
+              [field_value]
+            end
+            {:cont, acc ++ parts}
           end
         end)
-        |> List.flatten()
         |> Enum.join(separator)
 
-        "#{entity_name}#{separator}#{sort_key_parts}"
+        # Return just entity name if no sort key parts, otherwise include them
+        if sort_key_parts == "" do
+          entity_name
+        else
+          "#{entity_name}#{separator}#{sort_key_parts}"
+        end
 
       :use_defined ->
         # Use the regular sort key generation
@@ -346,22 +355,38 @@ defmodule Dynamo.Schema do
     config = arg.__struct__.settings()
     separator = config[:key_separator]
 
-    val =
-      arg.__struct__.sort_key()
-      |> Enum.map(fn elm ->
-        [
-          Atom.to_string(elm),
-          if(Map.get(arg, elm, "empty") == nil, do: "empty", else: Map.get(arg, elm, "empty"))
-        ]
-      end)
-      |> List.flatten()
-      |> Enum.join(separator)
+    # Generate sort key parts, stopping at the first nil field
+    sort_key_parts = arg.__struct__.sort_key()
+    |> Enum.reduce_while([], fn elm, acc ->
+      field_value = Map.get(arg, elm)
 
+      # Stop if we hit a nil or missing field
+      if field_value == nil do
+        {:halt, acc}
+      else
+        # Add field name and value
+        parts = [Atom.to_string(elm), field_value]
+        {:cont, acc ++ parts}
+      end
+    end)
+
+    # Join the parts
+    val = Enum.join(sort_key_parts, separator)
+
+    # Return based on prefix_sort_key configuration
     if config[:prefix_sort_key] do
       val
     else
-      [_ | rest] = val |> String.split(separator)
-      Enum.join(rest, separator)
+      # Remove field names, keep only values
+      parts = String.split(val, separator)
+      # Filter out field names (every other element starting from index 0)
+      values = parts
+      |> Enum.with_index()
+      |> Enum.filter(fn {_part, idx} -> rem(idx, 2) == 1 end)
+      |> Enum.map(fn {part, _idx} -> part end)
+      |> Enum.join(separator)
+
+      values
     end
   end
 
@@ -379,7 +404,6 @@ defmodule Dynamo.Schema do
   """
   def generate_and_add_sort_key(arg) do
     belongs_to_relations = arg.__struct__.belongs_to_relations()
-
     v = case belongs_to_relations do
       [] ->
         # No belongs_to relationships, use normal generation

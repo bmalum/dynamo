@@ -801,33 +801,52 @@ defmodule Dynamo.Table do
     {sk, updated_options} =
       case {belongs_to_config.sk_strategy, options[:sk_operator]} do
         {:prefix, nil} ->
-          # No sort key operator, query all items with this entity's prefix
-          entity_name =
-            struct.__struct__
-            |> Atom.to_string()
-            |> String.split(".")
-            |> List.last()
-            |> String.downcase()
+          # No sort key operator, generate partial sort key based on populated fields
+          # This will generate: "entity" if no fields set, "entity#field1" if first field set, etc.
+          sk = Dynamo.Schema.generate_belongs_to_sort_key(struct, belongs_to_config)
 
           # Get the separator from config
           config = struct.__struct__.settings()
           separator = config[:key_separator]
 
-          # Use begins_with to find all items with this entity's prefix
-          # Include the separator to match the actual sort key format
-          {"#{entity_name}#{separator}", Keyword.merge(options, sk_operator: :begins_with)}
+          # Use begins_with to match all items with this prefix
+          # Add separator only if we have sort key fields populated
+          sk_with_separator = if String.contains?(sk, separator) do
+            # Already has fields, use as-is with begins_with
+            sk
+          else
+            # Just entity name, add separator to match "entity#..."
+            "#{sk}#{separator}"
+          end
+
+          {sk_with_separator, Keyword.merge(options, sk_operator: :begins_with)}
 
         {:prefix, _operator} ->
-          # Sort key operator provided, generate the full sort key
+          # Sort key operator provided, generate the partial sort key
           sk = Dynamo.Schema.generate_belongs_to_sort_key(struct, belongs_to_config)
           {sk, options}
 
         {:use_defined, nil} ->
-          # No sort key operator, don't add sort key constraint
-          {nil, options}
+          # No sort key operator, generate partial sort key based on populated fields
+          # If no fields are populated, don't add sort key constraint
+          sk = Dynamo.Schema.generate_belongs_to_sort_key(struct, belongs_to_config)
+
+          # Check if we have any sort key fields populated
+          sort_key_fields = struct.__struct__.sort_key()
+          has_populated_fields = Enum.any?(sort_key_fields, fn field ->
+            Map.get(struct, field) != nil
+          end)
+
+          if has_populated_fields do
+            # Use begins_with to match items with this partial sort key
+            {sk, Keyword.merge(options, sk_operator: :begins_with)}
+          else
+            # No fields populated, don't add sort key constraint
+            {nil, options}
+          end
 
         {:use_defined, _operator} ->
-          # Sort key operator provided, generate the sort key
+          # Sort key operator provided, generate the partial sort key
           sk = Dynamo.Schema.generate_belongs_to_sort_key(struct, belongs_to_config)
           {sk, options}
       end
