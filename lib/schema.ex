@@ -1,12 +1,26 @@
 defmodule Dynamo.Schema do
   @moduledoc """
-  Provides a DSL for defining DynamoDB schema structures and key generation.
+  Provides a DSL for defining DynamoDB schema structures and automatic key generation.
 
-  This module allows you to define schemas for DynamoDB tables with structured field definitions,
-  partition keys, and sort keys. It automatically handles the generation of composite keys
-  based on the defined schema.
+  This module enables you to define structured schemas for DynamoDB tables with typed field
+  definitions, partition keys, and sort keys. It automatically handles the generation of
+  composite keys based on your schema configuration, eliminating boilerplate code and reducing
+  errors in key construction.
 
-  ## Example
+  ## Overview
+
+  DynamoDB is a schema-less NoSQL database, but maintaining consistent data structures is
+  essential for reliable applications. Dynamo.Schema brings structure to DynamoDB by:
+
+  - Defining typed fields with default values
+  - Automatically generating composite keys from field values
+  - Providing compile-time validation of schema definitions
+  - Enabling clean, maintainable code through an Ecto-inspired DSL
+  - Supporting flexible key generation strategies via configuration
+
+  ## Basic Usage
+
+  The simplest schema defines a table name and fields with their key properties:
 
       defmodule MyApp.User do
         use Dynamo.Schema
@@ -15,29 +29,55 @@ defmodule Dynamo.Schema do
           table_name "users"
 
           field :id, partition_key: true
-          field :email
+          field :email, sort_key: true
           field :name
-          field :created_at, sort_key: true
+          field :role, default: "user"
         end
       end
 
-  ## Schema Definition
+  ## Composite Keys
 
-  The schema supports the following features:
-  - Field definitions with optional defaults
-  - Partition key and sort key specifications
-  - Automatic key generation
-  - Table name definition
+  For more complex data models, you can create composite keys from multiple fields:
+
+      defmodule MyApp.Order do
+        use Dynamo.Schema
+
+        item do
+          table_name "orders"
+
+          field :tenant_id
+          field :user_id
+          field :order_id
+          field :created_at
+          field :status, default: "pending"
+
+          # Composite partition key from tenant and user
+          partition_key [:tenant_id, :user_id]
+
+          # Composite sort key from timestamp and order ID
+          sort_key [:created_at, :order_id]
+        end
+      end
+
+      # This generates keys like:
+      # pk: "tenant_id#acme#user_id#123#order"
+      # sk: "created_at#2024-01-15T10:30:00Z#order_id#ORD-789"
+
+  ## Field Options
+
+  - `partition_key: true` - Marks this field as part of the partition key
+  - `sort_key: true` - Marks this field as part of the sort key
+  - `default: value` - Sets a default value applied when creating structs
 
   ## Configuration Options
 
-  When using `Dynamo.Schema`, you can provide configuration options that override the defaults:
+  When using `Dynamo.Schema`, you can provide configuration options that override global defaults:
 
       defmodule MyApp.User do
         use Dynamo.Schema,
-          key_separator: "_",
-          prefix_sort_key: true,
-          suffix_partition_key: false
+          key_separator: "_",           # Use underscore instead of hash
+          prefix_sort_key: true,         # Include field names in sort key
+          suffix_partition_key: false    # Don't add entity type to partition key
 
         item do
           # schema definition...
@@ -46,15 +86,53 @@ defmodule Dynamo.Schema do
 
   Available configuration options:
 
-  - `key_separator`: String used to separate parts of composite keys (default: "#")
-  - `prefix_sort_key`: Whether to include field name as prefix in sort key (default: false)
-  - `suffix_partition_key`: Whether to add entity type suffix to partition key (default: true)
-  - `partition_key_name`: Name of the partition key in DynamoDB (default: "pk")
-  - `sort_key_name`: Name of the sort key in DynamoDB (default: "sk")
-  - `table_has_sort_key`: Whether the table has a sort key (default: true)
+  - `key_separator` - String used to separate parts of composite keys (default: `"#"`)
+  - `prefix_sort_key` - Whether to include field names as prefixes in sort key (default: `false`)
+  - `suffix_partition_key` - Whether to add entity type suffix to partition key (default: `true`)
+  - `partition_key_name` - Name of the partition key attribute in DynamoDB (default: `"pk"`)
+  - `sort_key_name` - Name of the sort key attribute in DynamoDB (default: `"sk"`)
+  - `table_has_sort_key` - Whether the table uses a sort key (default: `true`)
 
   These options can also be configured globally in your application configuration or
-  at runtime using `Dynamo.Config` functions.
+  at runtime using `Dynamo.Config` functions. Configuration precedence is:
+  schema options > process config > application config > defaults.
+
+  ## Advanced: Custom Key Generation
+
+  You can override the `before_write/1` callback to customize how items are prepared
+  before writing to DynamoDB:
+
+      defmodule MyApp.TimeSeries do
+        use Dynamo.Schema
+
+        item do
+          table_name "metrics"
+          field :device_id, partition_key: true
+          field :timestamp, sort_key: true
+          field :value
+        end
+
+        # Add timestamp if not provided
+        def before_write(item) do
+          item = if is_nil(item.timestamp) do
+            %{item | timestamp: DateTime.utc_now() |> DateTime.to_iso8601()}
+          else
+            item
+          end
+
+          # Call default key generation
+          item
+          |> Dynamo.Schema.generate_and_add_partition_key()
+          |> Dynamo.Schema.generate_and_add_sort_key()
+          |> Dynamo.Encoder.encode_root()
+        end
+      end
+
+  ## See Also
+
+  - `Dynamo.Config` - For managing configuration at different levels
+  - `Dynamo.Table` - For performing CRUD operations on schema-defined items
+  - `Dynamo.Encoder` - For manual encoding of structs to DynamoDB format
   """
 
   alias Dynamo.Schema

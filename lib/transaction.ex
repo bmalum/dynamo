@@ -1,21 +1,191 @@
 defmodule Dynamo.Transaction do
   @moduledoc """
-  Support for DynamoDB transactions.
+  Support for DynamoDB atomic transactions.
 
-  This module provides functions for performing atomic transactions in DynamoDB.
-  Transactions allow you to group multiple operations (put, update, delete, check)
-  and execute them as a single atomic unit, where either all operations succeed
-  or none of them do.
+  This module provides functions for performing atomic transactions in DynamoDB, allowing you
+  to group multiple operations (put, update, delete, check) and execute them as a single
+  all-or-nothing unit. Transactions ensure data consistency across multiple items and tables,
+  with automatic rollback if any operation fails.
+
+  ## Transaction Guarantees
+
+  DynamoDB transactions provide ACID properties:
+
+  - **Atomicity**: All operations succeed or none do
+  - **Consistency**: Operations follow conditional constraints
+  - **Isolation**: Transactions are isolated from other operations
+  - **Durability**: Successful transactions are permanently recorded
+
+  ## Supported Operations
+
+  Transactions support four types of operations:
+
+  ### Put Operation
+  Create or replace an item with optional conditional expression:
+
+      {:put, item}
+      {:put, item, condition_expression, expression_attrs}
+
+  ### Update Operation
+  Modify specific attributes of an existing item:
+
+      {:update, key_item, updates}
+      {:update, key_item, updates, condition_expression, expression_attrs}
+
+  ### Delete Operation
+  Remove an item from the table:
+
+      {:delete, key_item}
+      {:delete, key_item, condition_expression, expression_attrs}
+
+  ### Check Operation
+  Verify a condition without modifying data:
+
+      {:check, key_item, condition_expression, expression_attrs}
+
+  ## Special Update Operators
+
+  The update operation supports special operators for common patterns:
+
+  - `{:increment, amount}` - Add a numeric value to an attribute
+  - `{:decrement, amount}` - Subtract a numeric value from an attribute
+  - `{:append, list}` - Append elements to a list attribute
+  - `{:prepend, list}` - Prepend elements to a list attribute
+  - `{:if_not_exists, default}` - Set a value only if it doesn't already exist
+
+  ## Transaction Limits
+
+  Be aware of DynamoDB transaction limitations:
+
+  - Maximum 100 operations per transaction
+  - Maximum 4 MB total transaction size
+  - All operations must target tables in the same region
+  - No parallel transactions on the same items
+  - Conditional checks count toward operation limit
 
   ## Examples
 
-      # Perform a transaction with multiple operations
+  ### Basic Transaction
+
       Dynamo.Transaction.transact([
         {:put, %User{id: "user1", name: "John Doe", active: true}},
-        {:update, %Order{id: "order123", user_id: "user1"}, %{status: "processing"}},
-        {:delete, %Cart{id: "cart456", user_id: "user1"}},
-        {:check, %Inventory{id: "item789"}, "quantity >= :min", %{":min" => %{"N" => "5"}}}
+        {:update, %Profile{user_id: "user1"}, %{last_login: DateTime.utc_now()}},
+        {:delete, %TempSession{user_id: "user1"}}
       ])
+
+  ### Money Transfer (with condition checks)
+
+      Dynamo.Transaction.transact([
+        # Verify source account has sufficient funds
+        {:check, %Account{id: source_id},
+          "balance >= :amount",
+          %{
+            expression_attribute_values: %{
+              ":amount" => %{"N" => "100.00"}
+            }
+          }},
+
+        # Deduct from source account
+        {:update, %Account{id: source_id},
+          %{balance: {:decrement, 100.00}}},
+
+        # Add to destination account
+        {:update, %Account{id: dest_id},
+          %{balance: {:increment, 100.00}}},
+
+        # Record the transaction
+        {:put, %Transaction{
+          id: transaction_id,
+          from: source_id,
+          to: dest_id,
+          amount: 100.00,
+          timestamp: DateTime.utc_now()
+        }}
+      ])
+
+  ### Conditional Creation (idempotent user registration)
+
+      Dynamo.Transaction.transact([
+        # Create user only if they don't exist
+        {:put, %User{id: "user123", email: "user@example.com", name: "New User"},
+          "attribute_not_exists(id)",
+          nil},
+
+        # Create their initial profile
+        {:put, %Profile{
+          user_id: "user123",
+          status: "new",
+          created_at: DateTime.utc_now()
+        }},
+
+        # Initialize preferences with default values
+        {:put, %Preferences{
+          user_id: "user123",
+          notifications: true,
+          theme: "light"
+        }}
+      ])
+
+  ### Inventory Management
+
+      Dynamo.Transaction.transact([
+        # Check product is in stock
+        {:check, %Product{id: product_id},
+          "stock >= :quantity",
+          %{
+            expression_attribute_values: %{
+              ":quantity" => %{"N" => "5"}
+            }
+          }},
+
+        # Decrease inventory
+        {:update, %Product{id: product_id},
+          %{stock: {:decrement, 5}}},
+
+        # Create order record
+        {:put, %Order{
+          id: order_id,
+          product_id: product_id,
+          quantity: 5,
+          status: "pending"
+        }},
+
+        # Update user's order history
+        {:update, %User{id: user_id},
+          %{orders: {:append, [order_id]}}}
+      ])
+
+  ## Error Handling
+
+      case Dynamo.Transaction.transact(operations) do
+        {:ok, _result} ->
+          IO.puts("Transaction completed successfully")
+
+        {:error, %Dynamo.Error{type: :transaction_conflict}} ->
+          IO.puts("Transaction conflict - another operation modified the data")
+          # Retry the transaction
+
+        {:error, %Dynamo.Error{type: :conditional_check_failed}} ->
+          IO.puts("One or more conditions were not met")
+          # Handle condition failure
+
+        {:error, error} ->
+          IO.puts("Transaction failed: #{error.message}")
+      end
+
+  ## Best Practices
+
+  1. **Keep transactions small**: Fewer operations complete faster and reduce conflicts
+  2. **Use conditions wisely**: Validate assumptions to prevent race conditions
+  3. **Handle conflicts**: Implement retry logic with exponential backoff
+  4. **Minimize transaction scope**: Only include operations that must be atomic
+  5. **Consider costs**: Transactions use more capacity units than individual operations
+
+  ## See Also
+
+  - `Dynamo.Table` - For non-transactional CRUD operations
+  - `Dynamo.Schema` - For defining item structures
+  - `Dynamo.Error` - For error types and handling
   """
 
   @doc """

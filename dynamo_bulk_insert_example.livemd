@@ -498,16 +498,3 @@ In this Livebook, we've demonstrated how to:
 5. Query the data to verify it was inserted correctly
 
 This approach can be used to seed test data, migrate data between tables, or perform bulk operations on DynamoDB tables.
-
-```elixir
-%MyApp.Order{
-    created_at: "2024-10-26T18:15:09.369514Z",
-    status: "shipped",
-    total: 479.95,
-    product_ids: "prod-80",
-    user_id: "user-123",
-    id: "order-1",
-    type: "order"
-  }
-|> Dynamo.Table.insert()
-```
