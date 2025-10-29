@@ -1,0 +1,91 @@
+schemaVersion: 2.2.0
+metadata:
+  name: dynamo-elixir
+  version: 1.0.0
+  description: Devfile for Dynamo - An Elixir DSL for working with DynamoDB
+components:
+  - name: elixir-dev
+    container:
+      image: elixir:1.16
+      memoryLimit: 1Gi
+      sourceMapping: /ramdisk/app/dynamo
+commands:
+  - id: install-certificates
+    exec:
+      component: elixir-dev
+      commandLine: |
+        apt-get update && apt-get install -y ca-certificates
+        update-ca-certificates
+        export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+        export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+      workingDir: /ramdisk/app/dynamo
+      group:
+        kind: build
+  - id: install-system-tools
+    exec:
+      component: elixir-dev
+      commandLine: apt-get update && apt-get install -y git findutils grep curl wget
+      workingDir: /ramdisk/app/dynamo
+      group:
+        kind: build
+  - id: install-hex-rebar
+    exec:
+      component: elixir-dev
+      commandLine: mix local.hex --force && mix local.rebar --force
+      workingDir: /ramdisk/app/dynamo
+      group:
+        kind: build
+  - id: install-deps
+    exec:
+      component: elixir-dev
+      commandLine: mix deps.get
+      workingDir: /ramdisk/app/dynamo
+      group:
+        kind: build
+        isDefault: true
+  - id: compile
+    exec:
+      component: elixir-dev
+      commandLine: mix compile
+      workingDir: /ramdisk/app/dynamo
+      group:
+        kind: build
+    attributes:
+      timeout: 180
+  - id: test
+    exec:
+      component: elixir-dev
+      commandLine: mix test
+      workingDir: /ramdisk/app/dynamo
+      group:
+        kind: test
+        isDefault: true
+    attributes:
+      timeout: 180
+  - id: generate-docs
+    exec:
+      component: elixir-dev
+      commandLine: mix docs
+      workingDir: /ramdisk/app/dynamo
+      group:
+        kind: build
+  - id: format-check
+    exec:
+      component: elixir-dev
+      commandLine: mix format --check-formatted
+      workingDir: /ramdisk/app/dynamo
+      group:
+        kind: test
+  - id: clean
+    exec:
+      component: elixir-dev
+      commandLine: mix clean
+      workingDir: /ramdisk/app/dynamo
+      group:
+        kind: build
+events:
+  postStart:
+    - install-certificates
+    - install-system-tools
+    - install-hex-rebar
+    - install-deps

@@ -1,7 +1,92 @@
 defmodule Dynamo.Table do
-   @moduledoc """
-  Provides functions for interacting with DynamoDB tables.
-  This module handles basic CRUD operations and query building for DynamoDB tables.
+  @moduledoc """
+  Provides comprehensive functions for interacting with DynamoDB tables.
+
+  This module handles all core CRUD operations, queries, scans, and batch operations
+  for DynamoDB tables. It works seamlessly with schemas defined using `Dynamo.Schema`,
+  automatically managing key generation, encoding, decoding, and error handling.
+
+  ## Core Operations
+
+  ### Single Item Operations
+
+  - `put_item/2` - Create or replace an item
+  - `get_item/2` - Retrieve a single item by primary key
+  - `update_item/3` - Update specific attributes of an item
+  - `delete_item/2` - Remove an item from the table
+
+  ### Query and Scan Operations
+
+  - `list_items/1` - Query items by partition key
+  - `list_items/2` - Query items with advanced filters and conditions
+  - `scan/2` - Scan the entire table with optional filters
+  - `parallel_scan/2` - Perform parallel scans for improved performance on large tables
+
+  ### Batch Operations
+
+  - `batch_write_item/2` - Write multiple items in a single request
+  - `batch_get_item/2` - Retrieve multiple items efficiently
+
+  ## Query Building
+
+  The module provides powerful query building capabilities through `build_query/2`,
+  supporting:
+
+  - Partition key equality conditions
+  - Sort key comparison operators (=, <, >, <=, >=, begins_with, between)
+  - Filter expressions for post-query filtering
+  - Projection expressions to retrieve specific attributes
+  - Index queries (GSI and LSI)
+  - Pagination with exclusive start keys
+  - Consistent reads for strongly consistent data
+
+  ## Error Handling
+
+  All operations return `{:ok, result}` or `{:error, %Dynamo.Error{}}` tuples,
+  providing structured error information with context for debugging and error recovery.
+  Common error types include:
+
+  - `:validation_error` - Invalid parameters or schema definition
+  - `:aws_error` - DynamoDB service errors (rate limits, table not found, etc.)
+  - `:unknown_error` - Unexpected errors
+
+  ## Examples
+
+      # Simple create
+      {:ok, user} = Dynamo.Table.put_item(%User{id: "123", name: "John"})
+
+      # Retrieve with consistent read
+      {:ok, user} = Dynamo.Table.get_item(
+        %User{id: "123"},
+        consistent_read: true
+      )
+
+      # Query with filters
+      {:ok, users} = Dynamo.Table.list_items(
+        %User{tenant: "acme"},
+        filter_expression: "age >= :min_age",
+        expression_attribute_values: %{":min_age" => %{"N" => "18"}}
+      )
+
+      # Batch operations
+      {:ok, result} = Dynamo.Table.batch_write_item([user1, user2, user3])
+
+      # Parallel scan for large tables
+      {:ok, all_users} = Dynamo.Table.parallel_scan(User, segments: 8)
+
+  ## Performance Considerations
+
+  - Use batch operations when working with multiple items
+  - Leverage parallel scans for large table scans
+  - Use projection expressions to reduce data transfer
+  - Implement pagination for large result sets
+  - Consider using GSIs for alternative access patterns
+
+  ## See Also
+
+  - `Dynamo.Schema` - For defining table schemas
+  - `Dynamo.Transaction` - For atomic multi-item operations
+  - `Dynamo.Config` - For configuration management
   """
 
 @doc """
