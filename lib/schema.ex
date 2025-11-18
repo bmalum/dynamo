@@ -3,10 +3,10 @@ defmodule Dynamo.Schema do
   Provides a DSL for defining DynamoDB schema structures and key generation.
 
   This module allows you to define schemas for DynamoDB tables with structured field definitions,
-  partition keys, and sort keys. It automatically handles the generation of composite keys
-  based on the defined schema.
+  partition keys, sort keys, and Global Secondary Indexes (GSIs). It automatically handles the
+  generation of composite keys based on the defined schema.
 
-  ## Example
+  ## Basic Example
 
       defmodule MyApp.User do
         use Dynamo.Schema
@@ -21,12 +21,71 @@ defmodule Dynamo.Schema do
         end
       end
 
+  ## Global Secondary Index (GSI) Support
+
+  You can define Global Secondary Indexes in your schema to enable efficient querying
+  on non-key attributes:
+
+      defmodule MyApp.User do
+        use Dynamo.Schema
+
+        item do
+          table_name "users"
+
+          field :id, partition_key: true
+          field :tenant
+          field :email
+          field :name
+          field :status, default: "active"
+          field :created_at, sort_key: true
+
+          # GSI with partition key only
+          global_secondary_index "EmailIndex", partition_key: :email
+
+          # GSI with partition and sort keys
+          global_secondary_index "TenantIndex",
+            partition_key: :tenant,
+            sort_key: :created_at
+
+          # GSI with custom projection
+          global_secondary_index "TenantStatusIndex",
+            partition_key: :tenant,
+            sort_key: :status,
+            projection: :include,
+            projected_attributes: [:id, :email, :name]
+        end
+      end
+
+  ## GSI Query Examples
+
+  Once GSIs are defined, you can query them using the same `list_items/2` function:
+
+      # Query by email (EmailIndex)
+      {:ok, users} = MyApp.User.list_items(
+        %MyApp.User{email: "user@example.com"},
+        index_name: "EmailIndex"
+      )
+
+      # Query by tenant with date range (TenantIndex)
+      {:ok, recent_users} = MyApp.User.list_items(
+        %MyApp.User{tenant: "acme", created_at: "2023-01-01"},
+        index_name: "TenantIndex",
+        sk_operator: :gte
+      )
+
+      # Query active users in tenant (TenantStatusIndex)
+      {:ok, active_users} = MyApp.User.list_items(
+        %MyApp.User{tenant: "acme", status: "active"},
+        index_name: "TenantStatusIndex"
+      )
+
   ## Schema Definition
 
   The schema supports the following features:
   - Field definitions with optional defaults
   - Partition key and sort key specifications
-  - Automatic key generation
+  - Global Secondary Index definitions
+  - Automatic key generation for tables and GSIs
   - Table name definition
 
   ## Configuration Options
@@ -36,8 +95,7 @@ defmodule Dynamo.Schema do
       defmodule MyApp.User do
         use Dynamo.Schema,
           key_separator: "_",
-          prefix_sort_key: true,
-          suffix_partition_key: false
+          prefix_sort_key: true
 
         item do
           # schema definition...
@@ -48,7 +106,6 @@ defmodule Dynamo.Schema do
 
   - `key_separator`: String used to separate parts of composite keys (default: "#")
   - `prefix_sort_key`: Whether to include field name as prefix in sort key (default: false)
-  - `suffix_partition_key`: Whether to add entity type suffix to partition key (default: true)
   - `partition_key_name`: Name of the partition key in DynamoDB (default: "pk")
   - `sort_key_name`: Name of the sort key in DynamoDB (default: "sk")
   - `table_has_sort_key`: Whether the table has a sort key (default: true)
@@ -131,13 +188,17 @@ defmodule Dynamo.Schema do
       Module.register_attribute(__MODULE__, :fields, accumulate: true)
       Module.register_attribute(__MODULE__, :sort_key, accumulate: true)
       Module.register_attribute(__MODULE__, :partition_key, accumulate: true)
+      Module.register_attribute(__MODULE__, :global_secondary_indexes, accumulate: true)
+      Module.register_attribute(__MODULE__, :belongs_to_relations, accumulate: true)
 
       unquote(block)
 
       def table_name, do: @table_name
       def partition_key, do: @partition_key |> List.flatten()
-      def sort_key, do: @sort_key |> List.flatten()
+      def sort_key, do: @sort_key |> List.flatten() |> Enum.reverse()
       def fields, do: @fields
+      def global_secondary_indexes, do: @global_secondary_indexes || []
+      def belongs_to_relations, do: @belongs_to_relations || []
 
       defstruct Schema.prepare_struct(@fields)
 
@@ -149,6 +210,101 @@ defmodule Dynamo.Schema do
       end
 
       defoverridable before_write: 1
+    end
+  end
+
+  @doc """
+  Generates a partition key for belongs_to relationships.
+
+  When an entity has a belongs_to relationship, it uses the parent entity's
+  partition key format instead of its own.
+
+  ## Parameters
+    - arg: The struct instance to generate the partition key for
+    - belongs_to_config: Map containing belongs_to configuration
+
+  ## Returns
+    String representing the partition key using parent's format
+  """
+  def generate_belongs_to_partition_key(arg, belongs_to_config) do
+    # Get the foreign key value
+    foreign_key_field = belongs_to_config.foreign_key
+    foreign_key_value = Map.get(arg, foreign_key_field, "empty")
+    foreign_key_value = if foreign_key_value == nil, do: "empty", else: foreign_key_value
+
+    # Create a temporary struct with the parent's partition key field populated
+    # with the foreign key value to generate the correct partition key format
+    parent_module = belongs_to_config.parent_module
+    parent_partition_keys = parent_module.partition_key()
+
+    # Create a map with the parent's partition key fields populated with the foreign key value
+    parent_key_values =
+      parent_partition_keys
+      |> Enum.map(fn key -> {key, foreign_key_value} end)
+      |> Enum.into(%{})
+
+    # Create a temporary instance of the parent struct with the foreign key value
+    # This allows us to use the parent's normal partition key generation logic
+    parent_struct =
+      parent_module
+      |> struct(parent_key_values)
+
+    # Generate partition key using parent's normal generation logic
+    generate_partition_key(parent_struct)
+  end
+
+  @doc """
+  Generates a sort key for belongs_to relationships.
+
+  The sort key generation depends on the sk_strategy:
+  - :prefix - Prefixes the child's sort key with the entity name
+  - :use_defined - Uses the child's sort key as-is
+
+  ## Parameters
+    - arg: The struct instance to generate the sort key for
+    - belongs_to_config: Map containing belongs_to configuration
+
+  ## Returns
+    String representing the sort key
+  """
+  def generate_belongs_to_sort_key(arg, belongs_to_config) do
+    config = arg.__struct__.settings()
+    separator = config[:key_separator]
+
+    case belongs_to_config.sk_strategy do
+      :prefix ->
+        # Prefix with entity name
+        entity_name = arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
+
+        # Generate the sort key parts, stopping at the first nil/unset field
+        sort_key_parts = arg.__struct__.sort_key()
+        |> Enum.reduce_while([], fn elm, acc ->
+          field_value = Map.get(arg, elm)
+          # Stop if we hit a nil or missing field
+          if field_value == nil do
+            {:halt, acc}
+          else
+            # Add field name and value if prefix_sort_key is true
+            parts = if config[:prefix_sort_key] do
+              [Atom.to_string(elm), field_value]
+            else
+              [field_value]
+            end
+            {:cont, acc ++ parts}
+          end
+        end)
+        |> Enum.join(separator)
+
+        # Return just entity name if no sort key parts, otherwise include them
+        if sort_key_parts == "" do
+          entity_name
+        else
+          "#{entity_name}#{separator}#{sort_key_parts}"
+        end
+
+      :use_defined ->
+        # Use the regular sort key generation
+        generate_sort_key(arg)
     end
   end
 
@@ -166,25 +322,22 @@ defmodule Dynamo.Schema do
   """
   def generate_partition_key(arg) do
     config = arg.__struct__.settings()
-    name = arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
+
+    name =
+      arg.__struct__ |> Atom.to_string() |> String.split(".") |> List.last() |> String.downcase()
+
     separator = config[:key_separator]
 
-    val =
+    # Get only the field values (without field names)
+    values =
       arg.__struct__.partition_key()
       |> Enum.map(fn elm ->
-        [
-          Atom.to_string(elm),
-          if(Map.get(arg, elm, "empty") == nil, do: "empty", else: Map.get(arg, elm, "empty"))
-        ]
+        if(Map.get(arg, elm, "empty") == nil, do: "empty", else: Map.get(arg, elm, "empty"))
       end)
-      |> List.flatten()
       |> Enum.join(separator)
 
-    if config[:suffix_partition_key] do
-      "#{val}#{separator}#{name}"
-    else
-      val
-    end
+    # Always put entity name first, then the values
+    "#{name}#{separator}#{values}"
   end
 
   @doc """
@@ -202,26 +355,46 @@ defmodule Dynamo.Schema do
     config = arg.__struct__.settings()
     separator = config[:key_separator]
 
-    val = arg.__struct__.sort_key()
-    |> Enum.map(fn elm ->
-      [
-        Atom.to_string(elm),
-        if(Map.get(arg, elm, "empty") == nil, do: "empty", else: Map.get(arg, elm, "empty"))
-      ]
-    end)
-    |> List.flatten()
-    |> Enum.join(separator)
+    # Generate sort key parts, stopping at the first nil field
+    sort_key_parts = arg.__struct__.sort_key()
+    |> Enum.reduce_while([], fn elm, acc ->
+      field_value = Map.get(arg, elm)
 
+      # Stop if we hit a nil or missing field
+      if field_value == nil do
+        {:halt, acc}
+      else
+        # Add field name and value
+        parts = [Atom.to_string(elm), field_value]
+        {:cont, acc ++ parts}
+      end
+    end)
+
+    # Join the parts
+    val = Enum.join(sort_key_parts, separator)
+
+    # Return based on prefix_sort_key configuration
     if config[:prefix_sort_key] do
       val
     else
-      [_| rest] = val |> String.split(separator)
-      Enum.join(rest, separator)
+      # Remove field names, keep only values
+      parts = String.split(val, separator)
+      # Filter out field names (every other element starting from index 0)
+      values = parts
+      |> Enum.with_index()
+      |> Enum.filter(fn {_part, idx} -> rem(idx, 2) == 1 end)
+      |> Enum.map(fn {part, _idx} -> part end)
+      |> Enum.join(separator)
+
+      values
     end
   end
 
   @doc """
   Adds a generated sort key to the struct under the `:sk` key.
+
+  If the struct has belongs_to relationships, it will use the relationship's
+  sort key strategy instead of the normal generation.
 
   ## Parameters
     - arg: The struct instance to add the sort key to
@@ -230,7 +403,17 @@ defmodule Dynamo.Schema do
     Updated struct with sort key
   """
   def generate_and_add_sort_key(arg) do
-    v = generate_sort_key(arg)
+    belongs_to_relations = arg.__struct__.belongs_to_relations()
+    v = case belongs_to_relations do
+      [] ->
+        # No belongs_to relationships, use normal generation
+        generate_sort_key(arg)
+
+      [belongs_to_config | _] ->
+        # Use the first belongs_to relationship for sort key
+        generate_belongs_to_sort_key(arg, belongs_to_config)
+    end
+
     config = arg.__struct__.settings()
     sort_key_name = String.to_atom(config[:sort_key_name])
     Map.put(arg, sort_key_name, v)
@@ -239,6 +422,9 @@ defmodule Dynamo.Schema do
   @doc """
   Adds a generated partition key to the struct under the `:pk` key.
 
+  If the struct has belongs_to relationships, it will use the parent's
+  partition key format instead of its own.
+
   ## Parameters
     - arg: The struct instance to add the partition key to
 
@@ -246,10 +432,91 @@ defmodule Dynamo.Schema do
     Updated struct with partition key
   """
   def generate_and_add_partition_key(arg) do
-    v = generate_partition_key(arg)
+    belongs_to_relations = arg.__struct__.belongs_to_relations()
+
+    v = case belongs_to_relations do
+      [] ->
+        # No belongs_to relationships, use normal generation
+        generate_partition_key(arg)
+
+      [belongs_to_config | _] ->
+        # Use the first belongs_to relationship for partition key
+        # (assuming single belongs_to per entity for simplicity)
+        generate_belongs_to_partition_key(arg, belongs_to_config)
+    end
+
     config = arg.__struct__.settings()
     partition_key_name = String.to_atom(config[:partition_key_name])
     Map.put(arg, partition_key_name, v)
+  end
+
+  @doc """
+  Generates a partition key string for a GSI based on the GSI configuration.
+
+  The GSI partition key is generated by combining the GSI partition key field value
+  with the entity name, following the same pattern as table partition keys.
+
+  ## Parameters
+    - struct: The struct instance to generate the GSI partition key for
+    - gsi_config: Map containing GSI configuration with :partition_key field
+
+  ## Returns
+    String representing the GSI partition key
+
+  ## Example
+      # user = %User{email: "test@example.com"}
+      # gsi_config = %{partition_key: :email}
+      # Dynamo.Schema.generate_gsi_partition_key(user, gsi_config)
+      # "test@example.com"
+  """
+  def generate_gsi_partition_key(struct, gsi_config) do
+    # Get the GSI partition key field value
+    partition_key_field = gsi_config[:partition_key]
+    field_value = Map.get(struct, partition_key_field, "empty")
+    field_value = if field_value == nil, do: "empty", else: field_value
+
+    # For GSI keys, just return the raw field value without any prefixing
+    to_string(field_value)
+  end
+
+  @doc """
+  Generates a sort key string for a GSI based on the GSI configuration.
+
+  The GSI sort key is generated by combining the GSI sort key field name and value
+  with the configured separator, following the same pattern as table sort keys.
+  Returns nil if the GSI has no sort key configured (partition-only GSI).
+
+  ## Parameters
+    - struct: The struct instance to generate the GSI sort key for
+    - gsi_config: Map containing GSI configuration with optional :sort_key field
+
+  ## Returns
+    String representing the GSI sort key, or nil if GSI has no sort key
+
+  ## Example
+      # user = %User{created_at: "2023-01-01"}
+      # gsi_config = %{sort_key: :created_at}
+      # Dynamo.Schema.generate_gsi_sort_key(user, gsi_config)
+      # "2023-01-01"
+
+      # gsi_config = %{sort_key: nil}
+      # Dynamo.Schema.generate_gsi_sort_key(user, gsi_config)
+      # nil
+  """
+  def generate_gsi_sort_key(struct, gsi_config) do
+    case gsi_config[:sort_key] do
+      nil ->
+        # Partition-only GSI, no sort key
+        nil
+
+      sort_key_field ->
+        # Get the GSI sort key field value
+        field_value = Map.get(struct, sort_key_field, "empty")
+        field_value = if field_value == nil, do: "empty", else: field_value
+
+        # For GSI keys, just return the raw field value without any prefixing
+        to_string(field_value)
+    end
   end
 
   @doc """
@@ -408,6 +675,313 @@ defmodule Dynamo.Schema do
       end
 
       @partition_key unquote(list)
+    end
+  end
+
+  @doc """
+  Finds a GSI configuration by index name.
+
+  ## Parameters
+    - struct: The struct instance containing the schema
+    - index_name: String name of the GSI to find
+
+  ## Returns
+    - `{:ok, gsi_config}` if GSI is found
+    - `{:error, error_struct}` if GSI is not found
+
+  ## Example
+      # user = %User{}
+      # Dynamo.Schema.get_gsi_config(user, "EmailIndex")
+      # {:ok, %{name: "EmailIndex", partition_key: :email, sort_key: nil, ...}}
+
+      # Dynamo.Schema.get_gsi_config(user, "NonExistentIndex")
+      # {:error, %Dynamo.Error{...}}
+  """
+  def get_gsi_config(struct, index_name) do
+    gsi_configs = struct.__struct__.global_secondary_indexes()
+
+    case Enum.find(gsi_configs, fn config -> config.name == index_name end) do
+      nil ->
+        available_indexes = gsi_configs |> Enum.map(& &1.name) |> Enum.sort()
+        available_list = if Enum.empty?(available_indexes), do: "none", else: Enum.join(available_indexes, ", ")
+
+        {:error, Dynamo.Error.new(:validation_error,
+          "GSI '#{index_name}' not found. Available indexes: #{available_list}")}
+
+      gsi_config ->
+        {:ok, gsi_config}
+    end
+  end
+
+  @doc """
+  Validates that a GSI exists in the schema and required fields are populated.
+
+  ## Parameters
+    - struct: The struct instance to validate
+    - index_name: String name of the GSI to validate
+    - requires_sort_key: Boolean indicating if sort key validation is needed (default: false)
+
+  ## Returns
+    - `{:ok, gsi_config}` if validation passes
+    - `{:error, error_struct}` if validation fails
+
+  ## Example
+      # user = %User{email: "test@example.com"}
+      # Dynamo.Schema.validate_gsi_config(user, "EmailIndex")
+      # {:ok, %{name: "EmailIndex", partition_key: :email, ...}}
+
+      # user = %User{email: nil}
+      # Dynamo.Schema.validate_gsi_config(user, "EmailIndex")
+      # {:error, %Dynamo.Error{...}}
+  """
+  def validate_gsi_config(struct, index_name, requires_sort_key \\ false) do
+    with {:ok, gsi_config} <- get_gsi_config(struct, index_name),
+         :ok <- validate_gsi_partition_key_populated(struct, gsi_config),
+         :ok <- validate_gsi_sort_key_populated(struct, gsi_config, requires_sort_key) do
+      {:ok, gsi_config}
+    end
+  end
+
+  @doc """
+  Validates that the GSI partition key field is populated in the struct.
+
+  ## Parameters
+    - struct: The struct instance to validate
+    - gsi_config: Map containing GSI configuration
+
+  ## Returns
+    - `:ok` if partition key field is populated
+    - `{:error, error_struct}` if partition key field is missing or nil
+
+  ## Example
+      # user = %User{email: "test@example.com"}
+      # gsi_config = %{name: "EmailIndex", partition_key: :email}
+      # Dynamo.Schema.validate_gsi_partition_key_populated(user, gsi_config)
+      # :ok
+
+      # user = %User{email: nil}
+      # Dynamo.Schema.validate_gsi_partition_key_populated(user, gsi_config)
+      # {:error, %Dynamo.Error{...}}
+  """
+  def validate_gsi_partition_key_populated(struct, gsi_config) do
+    partition_key_field = gsi_config.partition_key
+    field_value = Map.get(struct, partition_key_field)
+
+    if field_value == nil do
+      {:error, Dynamo.Error.new(:validation_error,
+        "GSI '#{gsi_config.name}' requires field '#{partition_key_field}' to be populated")}
+    else
+      :ok
+    end
+  end
+
+  @doc """
+  Validates that the GSI sort key field is populated when sort operations are used.
+
+  ## Parameters
+    - struct: The struct instance to validate
+    - gsi_config: Map containing GSI configuration
+    - requires_sort_key: Boolean indicating if sort key validation is needed
+
+  ## Returns
+    - `:ok` if sort key validation passes
+    - `{:error, error_struct}` if sort key field is required but missing or nil
+
+  ## Example
+      # user = %User{created_at: "2023-01-01"}
+      # gsi_config = %{name: "TenantIndex", sort_key: :created_at}
+      # Dynamo.Schema.validate_gsi_sort_key_populated(user, gsi_config, true)
+      # :ok
+
+      # user = %User{created_at: nil}
+      # Dynamo.Schema.validate_gsi_sort_key_populated(user, gsi_config, true)
+      # {:error, %Dynamo.Error{...}}
+  """
+  def validate_gsi_sort_key_populated(struct, gsi_config, requires_sort_key) do
+    case {gsi_config.sort_key, requires_sort_key} do
+      # GSI has no sort key but sort operations are required - this should fail
+      {nil, true} ->
+        {:error, Dynamo.Error.new(:validation_error,
+          "GSI '#{gsi_config.name}' does not have a sort key but sort operation was requested")}
+
+      # GSI has no sort key and no sort operations required
+      {nil, false} ->
+        :ok
+
+      # GSI has sort key but sort operations not required
+      {_sort_key_field, false} ->
+        :ok
+
+      # GSI has sort key and sort operations are required
+      {sort_key_field, true} ->
+        field_value = Map.get(struct, sort_key_field)
+
+        if field_value == nil do
+          {:error, Dynamo.Error.new(:validation_error,
+            "GSI '#{gsi_config.name}' sort operation requires field '#{sort_key_field}' to be populated")}
+        else
+          :ok
+        end
+    end
+  end
+
+  @doc """
+  Defines a belongs_to relationship for the schema.
+
+  This allows an entity to share the same partition key as another entity,
+  enabling efficient querying of related items in a single-table design.
+
+  The foreign key is automatically inferred from the parent module's partition key.
+  For example, if the parent has `partition_key [:customer_id]`, the child schema
+  must have a field named `:customer_id`.
+
+  ## Parameters
+    - relation_name: Atom name of the relationship
+    - parent_module: Module of the parent entity
+    - opts: Keyword list of relationship configuration options
+
+  ## Options
+    - `:sk_strategy` - atom, how to handle sort key (:prefix or :use_defined) (optional, defaults to :prefix)
+    - `:foreign_key` - atom, field name that references the parent's partition key (optional, auto-inferred)
+
+  ## Example
+      # Auto-inferred foreign key (recommended)
+      belongs_to :customer, Dynamo.Customer, sk_strategy: :prefix
+
+      # Explicit foreign key (for custom naming)
+      belongs_to :customer, Dynamo.Customer,
+        foreign_key: :cust_id,
+        sk_strategy: :use_defined
+  """
+  defmacro belongs_to(relation_name, parent_module, opts \\ []) do
+    quote do
+      # Get parent module's partition key to infer foreign key
+      parent_partition_keys = unquote(parent_module).partition_key()
+
+      # Auto-infer foreign key from parent's partition key (use first one if multiple)
+      inferred_foreign_key = List.first(parent_partition_keys)
+
+      # Allow explicit override of foreign key
+      foreign_key_field = unquote(opts)[:foreign_key] || inferred_foreign_key
+
+      unless foreign_key_field do
+        raise "belongs_to '#{unquote(relation_name)}' could not infer foreign key from parent module #{unquote(parent_module)}. Parent must have a partition key defined."
+      end
+
+      # Set default values for optional parameters
+      sk_strategy = unquote(opts)[:sk_strategy] || :prefix
+
+      # Validate that foreign_key field exists in schema
+      foreign_key_exists = Enum.any?(@fields, fn
+        {name, _} -> name == foreign_key_field
+        {name} -> name == foreign_key_field
+      end)
+
+      unless foreign_key_exists do
+        raise "belongs_to '#{unquote(relation_name)}' foreign_key field ':#{foreign_key_field}' does not exist in schema. Add 'field(:#{foreign_key_field})' to your schema or specify a different :foreign_key option."
+      end
+
+      # Validate sk_strategy
+      unless sk_strategy in [:prefix, :use_defined] do
+        raise "belongs_to '#{unquote(relation_name)}' sk_strategy must be :prefix or :use_defined"
+      end
+
+      # Store belongs_to configuration
+      belongs_to_config = %{
+        relation_name: unquote(relation_name),
+        parent_module: unquote(parent_module),
+        foreign_key: foreign_key_field,
+        sk_strategy: sk_strategy
+      }
+
+      @belongs_to_relations belongs_to_config
+    end
+  end
+
+  @doc """
+  Defines a Global Secondary Index (GSI) for the schema.
+
+  ## Parameters
+    - index_name: String name of the GSI
+    - opts: Keyword list of GSI configuration options
+
+  ## Options
+    - `:partition_key` - atom, field name for GSI partition key (required)
+    - `:sort_key` - atom, field name for GSI sort key (optional)
+    - `:projection` - atom, projection type (:all, :keys_only, :include) (optional, defaults to :all)
+    - `:projected_attributes` - list of atoms, attributes to project when projection is :include (optional)
+
+  ## Example
+      global_secondary_index "EmailIndex", partition_key: :email
+      global_secondary_index "TenantIndex", partition_key: :tenant, sort_key: :created_at
+      global_secondary_index "TenantEmailIndex",
+        partition_key: :tenant,
+        sort_key: :email,
+        projection: :include,
+        projected_attributes: [:uuid4, :created_at]
+  """
+  defmacro global_secondary_index(index_name, opts) do
+    quote do
+      # Validate required partition_key option
+      partition_key_field = unquote(opts)[:partition_key]
+      unless partition_key_field do
+        raise "Global Secondary Index '#{unquote(index_name)}' requires :partition_key option"
+      end
+
+      # Get optional sort_key
+      sort_key_field = unquote(opts)[:sort_key]
+
+      # Set default values for optional parameters
+      projection = unquote(opts)[:projection] || :all
+      projected_attributes = unquote(opts)[:projected_attributes] || []
+
+      # Validate that partition_key field exists in schema
+      partition_key_exists = Enum.any?(@fields, fn
+        {name, _} -> name == partition_key_field
+        {name} -> name == partition_key_field
+      end)
+
+      unless partition_key_exists do
+        raise "Global Secondary Index '#{unquote(index_name)}' partition_key field ':#{partition_key_field}' does not exist in schema"
+      end
+
+      # Validate that sort_key field exists in schema (if provided)
+      if sort_key_field do
+        sort_key_exists = Enum.any?(@fields, fn
+          {name, _} -> name == sort_key_field
+          {name} -> name == sort_key_field
+        end)
+
+        unless sort_key_exists do
+          raise "Global Secondary Index '#{unquote(index_name)}' sort_key field ':#{sort_key_field}' does not exist in schema"
+        end
+      end
+
+      # Validate projected_attributes exist in schema (if projection is :include)
+      if projection == :include and length(projected_attributes) > 0 do
+        missing_projected_fields =
+          for field <- projected_attributes,
+              not Enum.any?(@fields, fn
+                {name, _} -> name == field
+                {name} -> name == field
+              end),
+              do: field
+
+        unless Enum.empty?(missing_projected_fields) do
+          raise "Global Secondary Index '#{unquote(index_name)}' projected_attributes contain non-existent fields: #{Enum.join(missing_projected_fields, ", ")}"
+        end
+      end
+
+      # Store GSI configuration
+      gsi_config = %{
+        name: unquote(index_name),
+        partition_key: partition_key_field,
+        sort_key: sort_key_field,
+        projection: projection,
+        projected_attributes: projected_attributes
+      }
+
+      @global_secondary_indexes gsi_config
     end
   end
 end

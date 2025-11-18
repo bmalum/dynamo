@@ -41,8 +41,8 @@ defmodule Mix.Tasks.Dynamo.GenerateSchema do
   @doc false
   def run(args) do
     # Start required applications
-    Application.ensure_all_started(:aws)
-    Application.ensure_all_started(:aws_credentials)
+    Application.ensure_all_started(:req)
+    Application.ensure_all_started(:jason)
 
     # Parse arguments
     {options, args, _} = OptionParser.parse(args,
@@ -130,7 +130,7 @@ defmodule Mix.Tasks.Dynamo.GenerateSchema do
 
   defp analyze_table(client, table_name, options) do
     # Get table description
-    case AWS.DynamoDB.describe_table(client, %{"TableName" => table_name}) do
+    case Dynamo.DynamoDB.describe_table(client, %{"TableName" => table_name}) do
       {:ok, table_info, _} ->
         # Extract key schema
         partition_key = options[:partition_key] || extract_partition_key(table_info)
@@ -190,7 +190,7 @@ defmodule Mix.Tasks.Dynamo.GenerateSchema do
   end
 
   defp scan_sample_items(client, table_name, limit) do
-    case AWS.DynamoDB.scan(client, %{"TableName" => table_name, "Limit" => limit}) do
+    case Dynamo.DynamoDB.scan(client, %{"TableName" => table_name, "Limit" => limit}) do
       {:ok, %{"Items" => items}, _} -> {:ok, items}
       {:error, error} -> {:error, error}
     end
@@ -255,14 +255,14 @@ defmodule Mix.Tasks.Dynamo.GenerateSchema do
     # Generate the full schema module
     """
     defmodule #{module_name} do
-  use Dynamo.Schema
+      use Dynamo.Schema
 
-  item do
-    table_name "#{table_name}"
+      item do
+        table_name "#{table_name}"
 
-#{all_fields}
-  end
-end
+        #{all_fields}
+      end
+    end
     """
   end
 end

@@ -32,8 +32,8 @@ defmodule Mix.Tasks.Dynamo.DeleteTable do
   @doc false
   def run(args) do
     # Start required applications
-    Application.ensure_all_started(:aws)
-    Application.ensure_all_started(:aws_credentials)
+    Application.ensure_all_started(:req)
+    Application.ensure_all_started(:jason)
 
     # Parse arguments
     {options, args, _} = OptionParser.parse(args,
@@ -62,7 +62,7 @@ defmodule Mix.Tasks.Dynamo.DeleteTable do
     client = Dynamo.AWS.client(client_opts)
 
     # Check if the table exists
-    case AWS.DynamoDB.describe_table(client, %{"TableName" => table_name}) do
+    case Dynamo.DynamoDB.describe_table(client, %{"TableName" => table_name}) do
       {:ok, table_info, _} ->
         # Table exists, proceed with deletion after confirmation
         item_count = get_item_count(table_info)
@@ -108,7 +108,7 @@ defmodule Mix.Tasks.Dynamo.DeleteTable do
     # Delete the table
     Mix.shell().info("Deleting table #{table_name}...")
 
-    case AWS.DynamoDB.delete_table(client, %{"TableName" => table_name}) do
+    case Dynamo.DynamoDB.delete_table(client, %{"TableName" => table_name}) do
       {:ok, response, _context} ->
         status = get_in(response, ["TableDescription", "TableStatus"])
         Mix.shell().info("Table #{table_name} deletion initiated (Status: #{status})")
@@ -127,7 +127,7 @@ defmodule Mix.Tasks.Dynamo.DeleteTable do
       Mix.shell().info("Giving up on waiting for table deletion. Please check manually.")
       :ok
     else
-      case AWS.DynamoDB.describe_table(client, %{"TableName" => table_name}) do
+      case Dynamo.DynamoDB.describe_table(client, %{"TableName" => table_name}) do
         {:error, %{"__type" => "ResourceNotFoundException", "Message" => _}} ->
           # Table no longer exists - deletion complete
           Mix.shell().info("Table #{table_name} has been deleted successfully")

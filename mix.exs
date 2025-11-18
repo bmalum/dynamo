@@ -21,9 +21,8 @@ defmodule Dynamo.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:aws, "~> 1.0.0"},
-      {:aws_credentials, "~> 0.3.2"},
-      {:hackney, "~> 1.16"},
+      {:req, "~> 0.5.0"},
+      {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:mock, "~> 0.3.0", only: :test},
       # {:dep_from_hexpm, "~> 0.3.0"},

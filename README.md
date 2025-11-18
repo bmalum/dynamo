@@ -285,20 +285,153 @@ For large tables, parallel scan can significantly improve performance:
 )
 ```
 
-### Advanced Queries
+### Global Secondary Indexes (GSIs)
 
-#### Global Secondary Indexes
+Dynamo provides comprehensive support for Global Secondary Indexes, allowing you to define them in your schema and query them with automatic key resolution.
+
+#### Defining GSIs in Your Schema
 
 ```elixir
-# Query a GSI
-{:ok, products} = MyApp.Product.list_items(
-  %MyApp.Product{name: "Smartphone"},
-  [
-    index_name: "NameIndex",
-    consistent_read: false
-  ]
+defmodule MyApp.User do
+  use Dynamo.Schema
+
+  item do
+    table_name "users"
+    
+    field :id, partition_key: true
+    field :tenant
+    field :email
+    field :name
+    field :status, default: "active"
+    field :created_at, sort_key: true
+
+    # GSI with partition key only
+    global_secondary_index "EmailIndex", partition_key: :email
+
+    # GSI with partition and sort keys
+    global_secondary_index "TenantIndex", 
+      partition_key: :tenant, 
+      sort_key: :created_at
+
+    # GSI with custom projection
+    global_secondary_index "TenantStatusIndex",
+      partition_key: :tenant,
+      sort_key: :status,
+      projection: :include,
+      projected_attributes: [:id, :email, :name]
+  end
+end
+```
+
+#### GSI Configuration Options
+
+- `:partition_key` - Field name for GSI partition key (required)
+- `:sort_key` - Field name for GSI sort key (optional)
+- `:projection` - Projection type (`:all`, `:keys_only`, `:include`) (default: `:all`)
+- `:projected_attributes` - List of attributes to project when projection is `:include`
+
+#### Querying GSIs
+
+GSI queries use the same `list_items/2` function with the `index_name` option:
+
+```elixir
+# Query by email (partition-only GSI)
+{:ok, users} = MyApp.User.list_items(
+  %MyApp.User{email: "user@example.com"},
+  index_name: "EmailIndex"
+)
+
+# Query by tenant with date range
+{:ok, recent_users} = MyApp.User.list_items(
+  %MyApp.User{tenant: "acme", created_at: "2023-01-01"},
+  index_name: "TenantIndex",
+  sk_operator: :gte
+)
+
+# Query with exact match on both keys
+{:ok, active_users} = MyApp.User.list_items(
+  %MyApp.User{tenant: "acme", status: "active"},
+  index_name: "TenantStatusIndex"
+)
+
+# Query with sort key operators
+{:ok, users} = MyApp.User.list_items(
+  %MyApp.User{tenant: "acme", created_at: "2023-01-01"},
+  index_name: "TenantIndex",
+  sk_operator: :between,
+  sk_end: "2023-12-31"
 )
 ```
+
+#### GSI Query Features
+
+GSI queries support all the same features as table queries:
+
+```elixir
+# With filter expressions
+{:ok, filtered_users} = MyApp.User.list_items(
+  %MyApp.User{tenant: "acme"},
+  index_name: "TenantIndex",
+  filter_expression: "status = :status AND #name <> :excluded_name",
+  expression_attribute_names: %{"#name" => "name"},
+  expression_attribute_values: %{
+    ":status" => %{"S" => "active"},
+    ":excluded_name" => %{"S" => "admin"}
+  }
+)
+
+# With pagination
+{:ok, page_1} = MyApp.User.list_items(
+  %MyApp.User{tenant: "acme"},
+  index_name: "TenantIndex",
+  limit: 10
+)
+
+# With projection expressions
+{:ok, users} = MyApp.User.list_items(
+  %MyApp.User{email: "user@example.com"},
+  index_name: "EmailIndex",
+  projection_expression: "id, #name, email",
+  expression_attribute_names: %{"#name" => "name"}
+)
+```
+
+#### GSI Error Handling
+
+Dynamo provides comprehensive error handling for GSI queries:
+
+```elixir
+case MyApp.User.list_items(%MyApp.User{email: nil}, index_name: "EmailIndex") do
+  {:ok, users} -> 
+    # Handle success
+    
+  {:error, %Dynamo.Error{type: :validation_error, message: message}} ->
+    # Common validation errors:
+    # - "GSI 'EmailIndex' requires field 'email' to be populated"
+    # - "GSI 'NonExistentIndex' not found. Available indexes: EmailIndex, TenantIndex"
+    # - "GSI 'TenantIndex' sort operation requires field 'created_at' to be populated"
+    # - "Consistent reads are not supported for Global Secondary Index queries"
+    IO.puts("Validation error: #{message}")
+    
+  {:error, error} ->
+    # Handle other errors (AWS errors, network issues, etc.)
+    IO.puts("Error: #{error.message}")
+end
+```
+
+#### GSI Limitations and Best Practices
+
+**Limitations:**
+- GSI queries do not support consistent reads (eventually consistent only)
+- GSI partition key field must be populated in the struct
+- GSI sort key field must be populated when using sort key operations
+
+**Best Practices:**
+- Use descriptive GSI names that indicate their purpose
+- Consider projection types carefully to balance query performance and storage costs
+- Use `:keys_only` projection for count queries or when you only need key attributes
+- Use `:include` projection with specific attributes when you need a subset of data
+- Design GSI partition keys to distribute data evenly across partitions
 
 #### Projection Expressions
 
@@ -325,7 +458,6 @@ config :dynamo,
   partition_key_name: "pk",
   sort_key_name: "sk",
   key_separator: "#",
-  suffix_partition_key: true,
   prefix_sort_key: false,
   table_has_sort_key: true
 ```
@@ -350,8 +482,7 @@ Per-schema configuration:
 defmodule MyApp.User do
   use Dynamo.Schema,
     key_separator: "_",
-    prefix_sort_key: true,
-    suffix_partition_key: false
+    prefix_sort_key: true
     
   # schema definition...
 end
@@ -364,7 +495,6 @@ end
 | `partition_key_name` | Name of the partition key in DynamoDB | `"pk"` |
 | `sort_key_name` | Name of the sort key in DynamoDB | `"sk"` |
 | `key_separator` | Separator for composite keys | `"#"` |
-| `suffix_partition_key` | Whether to add entity type suffix to partition key | `true` |
 | `prefix_sort_key` | Whether to include field name as prefix in sort key | `false` |
 | `table_has_sort_key` | Whether the table has a sort key | `true` |
 
@@ -490,6 +620,190 @@ Common error types:
 - `:access_denied` - Insufficient permissions
 - `:transaction_conflict` - Transaction conflicts with another operation
 
+## GSI Troubleshooting Guide
+
+### Common GSI Errors and Solutions
+
+#### 1. GSI Not Found Error
+
+**Error:** `"GSI 'EmailIndex' not found. Available indexes: TenantIndex, StatusIndex"`
+
+**Cause:** The specified GSI name doesn't exist in the schema.
+
+**Solution:**
+```elixir
+# Check available GSIs
+MyApp.User.global_secondary_indexes()
+# => [%{name: "TenantIndex", ...}, %{name: "StatusIndex", ...}]
+
+# Use correct GSI name
+{:ok, users} = MyApp.User.list_items(
+  %MyApp.User{tenant: "acme"},
+  index_name: "TenantIndex"  # Correct name
+)
+```
+
+#### 2. Missing Partition Key Data
+
+**Error:** `"GSI 'EmailIndex' requires field 'email' to be populated"`
+
+**Cause:** The GSI partition key field is nil or missing in the struct.
+
+**Solution:**
+```elixir
+# Incorrect - email field is nil
+user = %MyApp.User{email: nil}
+{:error, _} = MyApp.User.list_items(user, index_name: "EmailIndex")
+
+# Correct - populate the GSI partition key field
+user = %MyApp.User{email: "user@example.com"}
+{:ok, users} = MyApp.User.list_items(user, index_name: "EmailIndex")
+```
+
+#### 3. Missing Sort Key Data for Sort Operations
+
+**Error:** `"GSI 'TenantIndex' sort operation requires field 'created_at' to be populated"`
+
+**Cause:** Using sort key operators without populating the GSI sort key field.
+
+**Solution:**
+```elixir
+# Incorrect - created_at field is nil but using sort operator
+user = %MyApp.User{tenant: "acme", created_at: nil}
+{:error, _} = MyApp.User.list_items(user, 
+  index_name: "TenantIndex", 
+  sk_operator: :gte
+)
+
+# Correct - populate the GSI sort key field
+user = %MyApp.User{tenant: "acme", created_at: "2023-01-01"}
+{:ok, users} = MyApp.User.list_items(user, 
+  index_name: "TenantIndex", 
+  sk_operator: :gte
+)
+```
+
+#### 4. Consistent Read with GSI
+
+**Error:** `"Consistent reads are not supported for Global Secondary Index queries"`
+
+**Cause:** Attempting to use `consistent_read: true` with a GSI query.
+
+**Solution:**
+```elixir
+# Incorrect - GSIs don't support consistent reads
+{:error, _} = MyApp.User.list_items(
+  %MyApp.User{email: "user@example.com"},
+  index_name: "EmailIndex",
+  consistent_read: true  # Not supported for GSIs
+)
+
+# Correct - remove consistent_read option for GSI queries
+{:ok, users} = MyApp.User.list_items(
+  %MyApp.User{email: "user@example.com"},
+  index_name: "EmailIndex"
+)
+```
+
+#### 5. Sort Operation on Partition-Only GSI
+
+**Error:** `"GSI 'EmailIndex' does not have a sort key but sort operation was requested"`
+
+**Cause:** Using sort key operators on a GSI that only has a partition key.
+
+**Solution:**
+```elixir
+# Check GSI configuration
+gsi_config = MyApp.User.global_secondary_indexes()
+|> Enum.find(&(&1.name == "EmailIndex"))
+# => %{name: "EmailIndex", partition_key: :email, sort_key: nil, ...}
+
+# Incorrect - EmailIndex has no sort key
+{:error, _} = MyApp.User.list_items(
+  %MyApp.User{email: "user@example.com"},
+  index_name: "EmailIndex",
+  sk_operator: :begins_with  # Not supported for partition-only GSI
+)
+
+# Correct - use partition-only query
+{:ok, users} = MyApp.User.list_items(
+  %MyApp.User{email: "user@example.com"},
+  index_name: "EmailIndex"
+)
+```
+
+### Debugging GSI Queries
+
+#### 1. Inspect GSI Configuration
+
+```elixir
+# List all GSIs for a schema
+MyApp.User.global_secondary_indexes()
+
+# Find specific GSI configuration
+{:ok, gsi_config} = Dynamo.Schema.get_gsi_config(%MyApp.User{}, "TenantIndex")
+IO.inspect(gsi_config)
+# => %{name: "TenantIndex", partition_key: :tenant, sort_key: :created_at, ...}
+```
+
+#### 2. Validate GSI Data
+
+```elixir
+user = %MyApp.User{tenant: "acme", created_at: "2023-01-01"}
+
+# Check if GSI partition key is populated
+case Dynamo.Schema.validate_gsi_config(user, "TenantIndex") do
+  {:ok, gsi_config} -> 
+    IO.puts("GSI validation passed")
+  {:error, error} -> 
+    IO.puts("GSI validation failed: #{error.message}")
+end
+```
+
+#### 3. Generate GSI Keys Manually
+
+```elixir
+user = %MyApp.User{tenant: "acme", created_at: "2023-01-01"}
+{:ok, gsi_config} = Dynamo.Schema.get_gsi_config(user, "TenantIndex")
+
+# Generate GSI keys to see what would be used in the query
+gsi_pk = Dynamo.Schema.generate_gsi_partition_key(user, gsi_config)
+gsi_sk = Dynamo.Schema.generate_gsi_sort_key(user, gsi_config)
+
+IO.puts("GSI Partition Key: #{gsi_pk}")  # => "user#acme"
+IO.puts("GSI Sort Key: #{gsi_sk}")       # => "2023-01-01"
+```
+
+### Performance Considerations
+
+#### 1. GSI Query Patterns
+
+```elixir
+# Efficient - Query with both partition and sort key
+{:ok, users} = MyApp.User.list_items(
+  %MyApp.User{tenant: "acme", status: "active"},
+  index_name: "TenantStatusIndex"
+)
+
+# Less efficient - Query with only partition key on composite GSI
+{:ok, users} = MyApp.User.list_items(
+  %MyApp.User{tenant: "acme"},
+  index_name: "TenantStatusIndex"
+)
+```
+
+#### 2. Projection Optimization
+
+```elixir
+# Use specific projections when you don't need all attributes
+{:ok, users} = MyApp.User.list_items(
+  %MyApp.User{tenant: "acme"},
+  index_name: "TenantIndex",
+  projection_expression: "id, email, #name",
+  expression_attribute_names: %{"#name" => "name"}
+)
+```
+
 ## Advanced Usage
 
 ### Using Dynamo with LiveBook
@@ -595,3 +909,74 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Debugging with Logging
+
+Dynamo provides built-in logging functionality to help debug DynamoDB operations. You can enable logging to see all queries sent to DynamoDB in a formatted output.
+
+### Enabling Logging
+
+To enable DynamoDB query logging, use the `Dynamo.Logger` module:
+
+```elixir
+# Enable logging
+Dynamo.Logger.enable()
+
+# Perform operations - queries will be logged to stdout
+{:ok, user} = MyApp.User.get_item(%MyApp.User{id: "user-123", email: "john@example.com"})
+
+# Disable logging
+Dynamo.Logger.disable()
+```
+
+### Log Output Format
+
+When logging is enabled, each DynamoDB operation will be logged in JSON format with the following structure:
+
+```json
+{
+  "timestamp": "2023-06-15T10:30:45.123456Z",
+  "operation": "GetItem",
+  "table": "users",
+  "payload": {
+    "TableName": "users",
+    "Key": {
+      "pk": {"S": "user#user-123"},
+      "sk": {"S": "user#john@example.com"}
+    }
+  },
+  "response": {
+    "Item": {
+      "pk": {"S": "user#user-123"},
+      "sk": {"S": "user#john@example.com"},
+      "id": {"S": "user-123"},
+      "email": {"S": "john@example.com"},
+      "name": {"S": "John Doe"}
+    }
+  }
+}
+```
+
+### Checking Logging Status
+
+You can check if logging is currently enabled:
+
+```elixir
+# Check if logging is enabled
+if Dynamo.Logger.enabled?() do
+  IO.puts("DynamoDB logging is enabled")
+else
+  IO.puts("DynamoDB logging is disabled")
+end
+```
+
+### Use Cases
+
+Logging is particularly useful for:
+- Debugging complex query issues
+- Understanding the exact payloads sent to DynamoDB
+- Verifying key generation is working correctly
+- Performance analysis of DynamoDB operations
+- Troubleshooting in development environments
+
+Note that logging should typically be disabled in production environments to avoid performance overhead and excessive log output.

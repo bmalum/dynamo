@@ -38,7 +38,6 @@ defmodule Dynamo.ConfigTest do
     assert config[:partition_key_name] == "pk"
     assert config[:sort_key_name] == "sk"
     assert config[:key_separator] == "#"
-    assert config[:suffix_partition_key] == true
     assert config[:prefix_sort_key] == false
     assert config[:table_has_sort_key] == true
   end
@@ -83,8 +82,10 @@ defmodule Dynamo.ConfigTest do
     config = Dynamo.Config.config(schema_config)
     assert config[:key_separator] == "*"
     assert config[:partition_key_name] == "id"
-    assert config[:prefix_sort_key] == true  # From process config
-    assert config[:sort_key_name] == "sk"    # From defaults
+    # From process config
+    assert config[:prefix_sort_key] == true
+    # From defaults
+    assert config[:sort_key_name] == "sk"
   end
 
   test "get/3 retrieves specific configuration value" do

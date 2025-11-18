@@ -41,8 +41,8 @@ defmodule Mix.Tasks.Dynamo.CreateTable do
   @doc false
   def run(args) do
     # Start required applications
-    Application.ensure_all_started(:aws)
-    Application.ensure_all_started(:aws_credentials)
+    Application.ensure_all_started(:req)
+    Application.ensure_all_started(:jason)
 
     # Parse arguments
     {options, args, _} = OptionParser.parse(args,
@@ -125,7 +125,7 @@ defmodule Mix.Tasks.Dynamo.CreateTable do
     # Create the table
     Mix.shell().info("Creating table #{table_name}...")
 
-    case AWS.DynamoDB.create_table(client, create_request) do
+    case Dynamo.DynamoDB.create_table(client, create_request) do
       {:ok, response, _context} ->
         status = get_in(response, ["TableDescription", "TableStatus"])
         Mix.shell().info("Table #{table_name} created successfully (Status: #{status})")
@@ -141,7 +141,7 @@ defmodule Mix.Tasks.Dynamo.CreateTable do
   end
 
   defp wait_for_table_active(client, table_name) do
-    case AWS.DynamoDB.describe_table(client, %{"TableName" => table_name}) do
+    case Dynamo.DynamoDB.describe_table(client, %{"TableName" => table_name}) do
       {:ok, %{"Table" => %{"TableStatus" => "ACTIVE"}}, _} ->
         Mix.shell().info("Table #{table_name} is now ACTIVE")
 

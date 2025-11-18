@@ -20,7 +20,10 @@ defmodule Dynamo.TableTest do
     test "successfully deletes an item" do
       item = %TestItem{id: "123", name: "John"}
 
-      with_mock AWS.DynamoDB, [delete_item: fn _, _ -> {:ok, %{}, %{}} end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [delete_item: fn _, _ -> {:ok, %{}, %{}} end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         assert {:ok, nil} = Dynamo.Table.delete_item(item)
       end
     end
@@ -33,7 +36,10 @@ defmodule Dynamo.TableTest do
         "age" => %{"N" => "0"}
       }
 
-      with_mock AWS.DynamoDB, [delete_item: fn _, _ -> {:ok, %{"Attributes" => returned_item}, %{}} end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [delete_item: fn _, _ -> {:ok, %{"Attributes" => returned_item}, %{}} end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         assert {:ok, %TestItem{id: "123", name: "John", age: 0}} = Dynamo.Table.delete_item(item, return_values: "ALL_OLD")
       end
     end
@@ -42,7 +48,10 @@ defmodule Dynamo.TableTest do
       item = %TestItem{id: "123", name: "John"}
       error = %{"__type" => "ConditionalCheckFailedException", "Message" => "The condition check failed"}
 
-      with_mock AWS.DynamoDB, [delete_item: fn _, _ -> {:error, error} end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [delete_item: fn _, _ -> {:error, error} end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         assert {:error, %Dynamo.Error{type: :aws_error}} = Dynamo.Table.delete_item(item)
       end
     end
@@ -62,10 +71,13 @@ defmodule Dynamo.TableTest do
       item = %TestItem{id: "123", name: "John"}
       condition_expression = "attribute_exists(id)"
 
-      with_mock AWS.DynamoDB, [delete_item: fn client, payload ->
-        assert payload["ConditionExpression"] == condition_expression
-        {:ok, %{}, %{}}
-      end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [delete_item: fn _client, payload ->
+          assert payload["ConditionExpression"] == condition_expression
+          {:ok, %{}, %{}}
+        end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         Dynamo.Table.delete_item(item, condition_expression: condition_expression)
       end
     end
@@ -78,7 +90,10 @@ defmodule Dynamo.TableTest do
         %{"id" => %{"S" => "456"}, "name" => %{"S" => "Jane"}}
       ]
 
-      with_mock AWS.DynamoDB, [scan: fn _, _ -> {:ok, %{"Items" => items}, %{}} end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [scan: fn _, _ -> {:ok, %{"Items" => items}, %{}} end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         assert {:ok, %{items: [%TestItem{}, %TestItem{}], last_evaluated_key: nil}} = Dynamo.Table.scan(TestItem)
       end
     end
@@ -87,17 +102,23 @@ defmodule Dynamo.TableTest do
       items = [%{"id" => %{"S" => "123"}}]
       last_key = %{"id" => %{"S" => "123"}}
 
-      with_mock AWS.DynamoDB, [scan: fn _, _ -> {:ok, %{"Items" => items, "LastEvaluatedKey" => last_key}, %{}} end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [scan: fn _, _ -> {:ok, %{"Items" => items, "LastEvaluatedKey" => last_key}, %{}} end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         assert {:ok, %{items: [%TestItem{}], last_evaluated_key: ^last_key}} = Dynamo.Table.scan(TestItem)
       end
     end
 
     test "applies filter expressions" do
-      with_mock AWS.DynamoDB, [scan: fn _, payload ->
-        assert payload["FilterExpression"] == "age > :min_age"
-        assert payload["ExpressionAttributeValues"][":min_age"] == %{"N" => "18"}
-        {:ok, %{"Items" => []}, %{}}
-      end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [scan: fn _, payload ->
+          assert payload["FilterExpression"] == "age > :min_age"
+          assert payload["ExpressionAttributeValues"][":min_age"] == %{"N" => "18"}
+          {:ok, %{"Items" => []}, %{}}
+        end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         Dynamo.Table.scan(TestItem,
           filter_expression: "age > :min_age",
           expression_attribute_values: %{":min_age" => %{"N" => "18"}}
@@ -108,7 +129,10 @@ defmodule Dynamo.TableTest do
     test "returns error on AWS error" do
       error = %{"__type" => "ProvisionedThroughputExceededException", "Message" => "Throughput exceeded"}
 
-      with_mock AWS.DynamoDB, [scan: fn _, _ -> {:error, error} end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [scan: fn _, _ -> {:error, error} end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         assert {:error, %Dynamo.Error{type: :aws_error}} = Dynamo.Table.scan(TestItem)
       end
     end
@@ -119,12 +143,15 @@ defmodule Dynamo.TableTest do
       item = %TestItem{id: "123", name: "John"}
       updates = %{age: 30, email: "john@example.com"}
 
-      with_mock AWS.DynamoDB, [update_item: fn _, payload ->
-        assert payload["UpdateExpression"] =~ "SET"
-        assert Map.has_key?(payload["ExpressionAttributeNames"], "#attr_age")
-        assert Map.has_key?(payload["ExpressionAttributeValues"], ":val_age")
-        {:ok, %{}, %{}}
-      end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [update_item: fn _, payload ->
+          assert payload["UpdateExpression"] =~ "SET"
+          assert Map.has_key?(payload["ExpressionAttributeNames"], "#attr_age")
+          assert Map.has_key?(payload["ExpressionAttributeValues"], ":val_age")
+          {:ok, %{}, %{}}
+        end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         assert {:ok, nil} = Dynamo.Table.update_item(item, updates)
       end
     end
@@ -138,7 +165,10 @@ defmodule Dynamo.TableTest do
         "age" => %{"N" => "30"}
       }
 
-      with_mock AWS.DynamoDB, [update_item: fn _, _ -> {:ok, %{"Attributes" => updated_item}, %{}} end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [update_item: fn _, _ -> {:ok, %{"Attributes" => updated_item}, %{}} end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         assert {:ok, %TestItem{id: "123", name: "John", age: 30}} =
           Dynamo.Table.update_item(item, updates, return_values: "ALL_NEW")
       end
@@ -150,12 +180,15 @@ defmodule Dynamo.TableTest do
       attr_names = %{"#age" => "age", "#visits" => "visits"}
       attr_values = %{":age" => %{"N" => "30"}, ":inc" => %{"N" => "1"}}
 
-      with_mock AWS.DynamoDB, [update_item: fn _, payload ->
-        assert payload["UpdateExpression"] == custom_expression
-        assert payload["ExpressionAttributeNames"] == attr_names
-        assert payload["ExpressionAttributeValues"] == attr_values
-        {:ok, %{}, %{}}
-      end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [update_item: fn _, payload ->
+          assert payload["UpdateExpression"] == custom_expression
+          assert payload["ExpressionAttributeNames"] == attr_names
+          assert payload["ExpressionAttributeValues"] == attr_values
+          {:ok, %{}, %{}}
+        end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         Dynamo.Table.update_item(item, %{},
           update_expression: custom_expression,
           expression_attribute_names: attr_names,
@@ -189,9 +222,12 @@ defmodule Dynamo.TableTest do
         %{"id" => %{"S" => "456"}, "name" => %{"S" => "Jane"}}
       ]
 
-      with_mock AWS.DynamoDB, [batch_get_item: fn _, _ ->
-        {:ok, %{"Responses" => %{"test_table" => response_items}}, %{}}
-      end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [batch_get_item: fn _, _ ->
+          {:ok, %{"Responses" => %{"test_table" => response_items}}, %{}}
+        end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         assert {:ok, %{items: [%TestItem{}, %TestItem{}], unprocessed_keys: []}} =
           Dynamo.Table.batch_get_item(items)
       end
@@ -206,12 +242,15 @@ defmodule Dynamo.TableTest do
       response_items = [%{"id" => %{"S" => "123"}, "name" => %{"S" => "John"}}]
       unprocessed = [%{"pk" => %{"S" => "id#456#testitem"}, "sk" => %{"S" => "Jane"}}]
 
-      with_mock AWS.DynamoDB, [batch_get_item: fn _, _ ->
-        {:ok, %{
-          "Responses" => %{"test_table" => response_items},
-          "UnprocessedKeys" => %{"test_table" => %{"Keys" => unprocessed}}
-        }, %{}}
-      end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [batch_get_item: fn _, _ ->
+          {:ok, %{
+            "Responses" => %{"test_table" => response_items},
+            "UnprocessedKeys" => %{"test_table" => %{"Keys" => unprocessed}}
+          }, %{}}
+        end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         {:ok, result} = Dynamo.Table.batch_get_item(items)
         assert length(result.items) == 1
         assert length(result.unprocessed_keys) == 1
@@ -222,7 +261,10 @@ defmodule Dynamo.TableTest do
       items = [%TestItem{id: "123", name: "John"}]
       aws_error = %{"__type" => "ProvisionedThroughputExceededException", "Message" => "Throughput exceeded"}
 
-      with_mock AWS.DynamoDB, [batch_get_item: fn _, _ -> {:error, aws_error} end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [batch_get_item: fn _, _ -> {:error, aws_error} end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         {:error, error} = Dynamo.Table.batch_get_item(items)
         assert error.type == :aws_error
         assert error.message =~ "Throughput exceeded"
@@ -232,11 +274,14 @@ defmodule Dynamo.TableTest do
     test "applies consistent read option" do
       items = [%TestItem{id: "123", name: "John"}]
 
-      with_mock AWS.DynamoDB, [batch_get_item: fn _, payload ->
-        table_request = payload["RequestItems"]["test_table"]
-        assert table_request["ConsistentRead"] == true
-        {:ok, %{"Responses" => %{"test_table" => []}}, %{}}
-      end] do
+      with_mocks([
+        {Dynamo.DynamoDB, [], [batch_get_item: fn _, payload ->
+          table_request = payload["RequestItems"]["test_table"]
+          assert table_request["ConsistentRead"] == true
+          {:ok, %{"Responses" => %{"test_table" => []}}, %{}}
+        end]},
+        {Dynamo.AWS, [], [client: fn -> :mock_client end]}
+      ]) do
         Dynamo.Table.batch_get_item(items, consistent_read: true)
       end
     end
