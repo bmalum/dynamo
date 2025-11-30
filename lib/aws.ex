@@ -14,20 +14,38 @@ defmodule Dynamo.AWS do
     * `:endpoint` - Custom endpoint URL for DynamoDB (useful for local development)
     * `:region` - AWS region to use (defaults to AWS_REGION env var or "us-east-1")
     * `:timeout` - Request timeout in milliseconds (default: 30000)
-    * `:access_key_id` - AWS access key ID (overrides environment)
-    * `:secret_access_key` - AWS secret access key (overrides environment)
-    * `:session_token` - AWS session token for temporary credentials (overrides environment)
+    * `:access_key_id` - AWS access key ID (overrides all other credential sources)
+    * `:secret_access_key` - AWS secret access key (overrides all other credential sources)
+    * `:session_token` - AWS session token for temporary credentials (overrides all other credential sources)
+
+  ## Credential Resolution Order
+  
+  Credentials are resolved in the following order:
+  
+  1. **Explicit options** - If `access_key_id` and `secret_access_key` are provided in options
+  2. **ECS Full URI** - If `AWS_CONTAINER_CREDENTIALS_FULL_URI` environment variable is set
+  3. **ECS Relative URI** - If `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` environment variable is set (Fargate/ECS)
+  4. **EC2 Instance Metadata** - Queries IMDSv2 at 169.254.169.254 (for EC2 instances with IAM roles)
+  5. **Environment Variables** - Falls back to `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
 
   ## Environment Variables
     * `AWS_REGION` - AWS region to use if not specified in options
     * `AWS_DYNAMODB_ENDPOINT` - Custom endpoint URL if not specified in options
-    * `AWS_ACCESS_KEY_ID` - AWS access key ID
-    * `AWS_SECRET_ACCESS_KEY` - AWS secret access key
-    * `AWS_SESSION_TOKEN` - AWS session token for temporary credentials
+    * `AWS_CONTAINER_CREDENTIALS_FULL_URI` - Full URI for ECS task credentials
+    * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` - Relative URI for ECS task credentials
+    * `AWS_ACCESS_KEY_ID` - AWS access key ID (fallback)
+    * `AWS_SECRET_ACCESS_KEY` - AWS secret access key (fallback)
+    * `AWS_SESSION_TOKEN` - AWS session token for temporary credentials (fallback)
 
   ## Examples
 
-      # Basic client with default settings (uses environment variables)
+      # Basic client (automatically detects credentials from environment)
+      client = Dynamo.AWS.client()
+
+      # Works automatically in Fargate/ECS with task IAM role
+      client = Dynamo.AWS.client()
+
+      # Works automatically on EC2 instances with IAM role
       client = Dynamo.AWS.client()
 
       # Client with custom endpoint (e.g., for local DynamoDB)
@@ -36,7 +54,7 @@ defmodule Dynamo.AWS do
       # Client with custom region
       client = Dynamo.AWS.client(region: "eu-west-1")
 
-      # Client with explicit credentials including session token
+      # Client with explicit credentials (overrides all automatic detection)
       client = Dynamo.AWS.client(
         access_key_id: "AKIAIOSFODNN7EXAMPLE",
         secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
@@ -47,33 +65,150 @@ defmodule Dynamo.AWS do
     AWS client configured for DynamoDB operations
   """
   def client(opts \\ []) do
-    access_key_id = opts[:access_key_id] || System.get_env("AWS_ACCESS_KEY_ID")
-    secret_access_key = opts[:secret_access_key] || System.get_env("AWS_SECRET_ACCESS_KEY")
-    session_token = opts[:session_token] || System.get_env("AWS_SESSION_TOKEN")
+    credentials = get_credentials(opts)
     region = opts[:region] || System.get_env("AWS_REGION") || "us-east-1"
     endpoint = opts[:endpoint] || System.get_env("AWS_DYNAMODB_ENDPOINT")
     timeout = opts[:timeout] || 30000
 
-    if is_nil(access_key_id) or is_nil(secret_access_key) do
-      raise ArgumentError, """
-      AWS credentials not found. Please provide them via:
-      1. Options: access_key_id and secret_access_key
-      2. Environment variables: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
-      """
-    end
-
     base_url = endpoint || "https://dynamodb.#{region}.amazonaws.com"
 
     %{
-      access_key_id: access_key_id,
-      secret_access_key: secret_access_key,
-      session_token: session_token,
+      access_key_id: credentials.access_key_id,
+      secret_access_key: credentials.secret_access_key,
+      session_token: credentials.session_token,
       region: region,
       endpoint: base_url,
       timeout: timeout,
       service: "dynamodb"
     }
   end
+
+  defp get_credentials(opts) do
+    cond do
+      opts[:access_key_id] && opts[:secret_access_key] ->
+        %{
+          access_key_id: opts[:access_key_id],
+          secret_access_key: opts[:secret_access_key],
+          session_token: opts[:session_token]
+        }
+
+      true ->
+        case fetch_metadata_credentials() do
+          {:ok, creds} -> creds
+          {:error, _} ->
+            case fetch_env_credentials() do
+              {:ok, creds} -> creds
+              {:error, _} ->
+                raise ArgumentError, """
+                AWS credentials not found. Please provide them via:
+                1. Options: access_key_id and secret_access_key
+                2. ECS metadata endpoint (automatic in Fargate/ECS)
+                3. EC2 instance metadata (automatic on EC2)
+                4. Environment variables: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+                """
+            end
+        end
+    end
+  end
+
+  defp fetch_metadata_credentials do
+    cond do
+      full_uri = System.get_env("AWS_CONTAINER_CREDENTIALS_FULL_URI") ->
+        fetch_ecs_full_uri_credentials(full_uri)
+
+      relative_uri = System.get_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") ->
+        fetch_ecs_relative_uri_credentials(relative_uri)
+
+      true ->
+        fetch_ec2_imds_credentials()
+    end
+  end
+
+  defp fetch_ecs_full_uri_credentials(uri) do
+    case Req.get(uri, receive_timeout: 5000) do
+      {:ok, %{status: 200, body: body}} -> parse_credentials(body)
+      _ -> {:error, :metadata_fetch_failed}
+    end
+  end
+
+  defp fetch_ecs_relative_uri_credentials(relative_uri) do
+    url = "http://169.254.170.2#{relative_uri}"
+    
+    case Req.get(url, receive_timeout: 5000) do
+      {:ok, %{status: 200, body: body}} -> parse_credentials(body)
+      _ -> {:error, :metadata_fetch_failed}
+    end
+  end
+
+  defp fetch_ec2_imds_credentials do
+    with {:ok, token} <- fetch_imds_token(),
+         {:ok, role} <- fetch_imds_role(token),
+         {:ok, body} <- fetch_imds_credentials(token, role) do
+      parse_credentials(body)
+    else
+      _ -> {:error, :metadata_fetch_failed}
+    end
+  end
+
+  defp fetch_imds_token do
+    url = "http://169.254.169.254/latest/api/token"
+    headers = [{"X-aws-ec2-metadata-token-ttl-seconds", "21600"}]
+    
+    case Req.put(url, headers: headers, receive_timeout: 1000) do
+      {:ok, %{status: 200, body: token}} -> {:ok, token}
+      _ -> {:error, :token_fetch_failed}
+    end
+  end
+
+  defp fetch_imds_role(token) do
+    url = "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+    headers = [{"X-aws-ec2-metadata-token", token}]
+    
+    case Req.get(url, headers: headers, receive_timeout: 1000) do
+      {:ok, %{status: 200, body: role}} -> {:ok, String.trim(role)}
+      _ -> {:error, :role_fetch_failed}
+    end
+  end
+
+  defp fetch_imds_credentials(token, role) do
+    url = "http://169.254.169.254/latest/meta-data/iam/security-credentials/#{role}"
+    headers = [{"X-aws-ec2-metadata-token", token}]
+    
+    case Req.get(url, headers: headers, receive_timeout: 1000) do
+      {:ok, %{status: 200, body: body}} -> {:ok, body}
+      _ -> {:error, :credentials_fetch_failed}
+    end
+  end
+
+  defp fetch_env_credentials do
+    case {System.get_env("AWS_ACCESS_KEY_ID"), System.get_env("AWS_SECRET_ACCESS_KEY")} do
+      {nil, _} -> {:error, :no_env_credentials}
+      {_, nil} -> {:error, :no_env_credentials}
+      {access_key, secret_key} ->
+        {:ok, %{
+          access_key_id: access_key,
+          secret_access_key: secret_key,
+          session_token: System.get_env("AWS_SESSION_TOKEN")
+        }}
+    end
+  end
+
+  defp parse_credentials(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, parsed} -> parse_credentials(parsed)
+      _ -> {:error, :invalid_credentials_format}
+    end
+  end
+
+  defp parse_credentials(%{"AccessKeyId" => access_key, "SecretAccessKey" => secret_key, "Token" => token}) do
+    {:ok, %{
+      access_key_id: access_key,
+      secret_access_key: secret_key,
+      session_token: token
+    }}
+  end
+
+  defp parse_credentials(_), do: {:error, :invalid_credentials_format}
 
   @doc """
   Makes a DynamoDB API request using the AWS Signature Version 4.
