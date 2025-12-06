@@ -11,6 +11,7 @@ A comprehensive guide for AI agents and developers on using the Dynamo library e
 - [DynamoDB Best Practices](#dynamodb-best-practices)
 - [Common Patterns](#common-patterns)
 - [Anti-Patterns to Avoid](#anti-patterns-to-avoid)
+- [Quick Reference](#quick-reference)
 
 ---
 
@@ -305,9 +306,16 @@ MyApp.User.list_items(
 
 **Don't:**
 ```elixir
-# Avoid scanning entire table
-Dynamo.Table.scan(MyApp.User)  # Expensive!
+# Avoid scanning entire table into memory
+{:ok, %{items: users}} = Dynamo.Table.scan(MyApp.User)  # Loads everything!
+
+# ✅ Better for large tables: Use streaming (but still expensive!)
+Dynamo.Table.Stream.scan(MyApp.User)
+|> Stream.filter(&(&1.active))
+|> Enum.each(&process_user/1)
 ```
+
+**Important:** Scans are expensive operations even with streaming. They consume read capacity for every item examined (not just returned). Always prefer queries with partition keys when possible. Use scans only when necessary (data exports, migrations, analytics).
 
 ### 4. Batch Operations
 
@@ -348,6 +356,22 @@ end
 - Use `:keys_only` or `:include` projections when possible
 - GSIs are eventually consistent only
 
+**Querying GSIs:**
+```elixir
+# Query by email
+MyApp.User.list_items(
+  %MyApp.User{email: "user@example.com"},
+  index_name: "EmailIndex"
+)
+
+# Query by status with time range
+MyApp.User.list_items(
+  %MyApp.User{status: "active", created_at: "2024-01-01"},
+  index_name: "StatusIndex",
+  sk_operator: :gte
+)
+```
+
 ### 6. Error Handling & Retries
 
 ```elixir
@@ -369,6 +393,14 @@ case MyApp.User.get_item(%MyApp.User{id: "user123"}) do
 end
 ```
 
+**Common Error Types:**
+- `:resource_not_found` - The requested resource doesn't exist
+- `:provisioned_throughput_exceeded` - Rate limits exceeded
+- `:conditional_check_failed` - Condition expression evaluated to false
+- `:validation_error` - Parameter validation failed
+- `:access_denied` - Insufficient permissions
+- `:transaction_conflict` - Transaction conflicts with another operation
+
 ### 7. Transactions for Consistency
 
 ```elixir
@@ -385,6 +417,8 @@ Dynamo.Transaction.transact([
 - 4MB total request size
 - All items must be in same region
 
+**Note:** Transaction support requires the `Dynamo.Transaction` module. See README for implementation details.
+
 ### 8. TTL for Data Lifecycle
 
 DynamoDB can automatically delete expired items. Design your schema to include TTL:
@@ -394,6 +428,40 @@ field :ttl  # Unix timestamp for expiration
 ```
 
 Enable TTL on the table via AWS Console or CLI.
+
+### 9. Streaming for Large Tables
+
+When you need to process large tables, use streaming to avoid memory exhaustion:
+
+**Sequential Streaming** (memory-efficient):
+```elixir
+# Process items lazily, constant memory usage
+Dynamo.Table.Stream.scan(User, page_size: 500)
+|> Stream.filter(&(&1.active))
+|> Enum.each(&process_user/1)
+```
+
+**Parallel Streaming** (high-throughput):
+```elixir
+# Scan multiple segments concurrently
+Dynamo.Table.Stream.parallel_scan(User, segments: 8)
+|> Flow.from_enumerable(max_demand: 500)
+|> Flow.map(&process_user/1)
+|> Enum.to_list()
+```
+
+**Process-Based** (real-time):
+```elixir
+# Send items to a GenServer as they're scanned
+{:ok, task} = Dynamo.Table.Stream.scan_to_process(
+  User,
+  consumer_pid,
+  segments: 4,
+  batch_size: 50
+)
+```
+
+**Important:** Streaming reduces memory usage but doesn't reduce cost. Scans still consume read capacity for every item examined. See `guides/STREAMING_GUIDE.md` for detailed documentation.
 
 ---
 
@@ -505,12 +573,19 @@ MyApp.GraphEdge.list_items(
 ### 1. Scan Operations in Production
 
 ```elixir
-# ❌ Bad: Full table scan
-Dynamo.Table.scan(MyApp.User)
+# ❌ Bad: Full table scan loading all into memory
+{:ok, %{items: users}} = Dynamo.Table.scan(MyApp.User)
 
-# ✅ Good: Query with partition key
+# ✅ Better: Use streaming for memory efficiency (but still expensive!)
+Dynamo.Table.Stream.scan(MyApp.User)
+|> Stream.filter(&(&1.active))
+|> Enum.each(&process_user/1)
+
+# ✅ Best: Query with partition key
 MyApp.User.list_items(%MyApp.User{tenant_id: "tenant123"})
 ```
+
+**Note:** Scans consume read capacity for every item examined, regardless of streaming. Always prefer queries when possible.
 
 ### 2. Hot Partitions
 
