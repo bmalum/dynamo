@@ -1,3 +1,5 @@
+# Only compile this module if GenStage is available
+if Code.ensure_loaded?(GenStage) do
 defmodule Dynamo.Table.Stream.Producer do
   @moduledoc """
   GenStage producer for streaming DynamoDB scan results with backpressure.
@@ -5,6 +7,9 @@ defmodule Dynamo.Table.Stream.Producer do
   This producer implements demand-driven scanning, only fetching pages from
   DynamoDB when consumers request more items. This provides automatic
   backpressure control and prevents overwhelming downstream consumers.
+
+  **Note:** This module requires the optional `gen_stage` dependency.
+  Add `{:gen_stage, "~> 1.2"}` to your mix.exs to use this module.
 
   ## Usage
 
@@ -226,3 +231,4 @@ defmodule Dynamo.Table.Stream.Producer do
     end
   end
 end
+end # if Code.ensure_loaded?(GenStage)
