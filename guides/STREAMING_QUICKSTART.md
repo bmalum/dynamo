@@ -26,18 +26,18 @@ end
 
 ```elixir
 # Process active users
-Dynamo.Table.stream_scan(User)
+Dynamo.Table.Stream.scan(User)
 |> Stream.filter(&(&1.status == "active"))
 |> Stream.map(&send_email/1)
 |> Stream.run()
 
 # Export to CSV
-Dynamo.Table.stream_scan(User, page_size: 500)
+Dynamo.Table.Stream.scan(User, page_size: 500)
 |> Stream.each(&write_to_csv/1)
 |> Stream.run()
 
 # Take first 1000
-Dynamo.Table.stream_scan(User)
+Dynamo.Table.Stream.scan(User)
 |> Enum.take(1000)
 ```
 
@@ -51,13 +51,13 @@ Dynamo.Table.stream_scan(User)
 
 ```elixir
 # Process millions of users in parallel
-Dynamo.Table.stream_parallel_scan(User, segments: 8)
+Dynamo.Table.Stream.parallel_scan(User, segments: 8)
 |> Flow.from_enumerable(max_demand: 500)
 |> Flow.map(&process_user/1)
 |> Enum.to_list()
 
 # Aggregate data
-Dynamo.Table.stream_parallel_scan(User, segments: 8)
+Dynamo.Table.Stream.parallel_scan(User, segments: 8)
 |> Flow.from_enumerable()
 |> Flow.partition(key: {:key, :tenant_id})
 |> Flow.reduce(fn -> %{} end, fn user, acc ->
@@ -79,7 +79,7 @@ end)
 {:ok, consumer} = MyConsumer.start_link()
 
 # Stream to consumer
-{:ok, task} = Dynamo.Table.stream_scan_to_process(
+{:ok, task} = Dynamo.Table.Stream.scan_to_process(
   User,
   consumer,
   segments: 4,
@@ -101,7 +101,7 @@ end)
 
 ```elixir
 # Good - filter at DynamoDB (less data transfer)
-Dynamo.Table.stream_scan(User,
+Dynamo.Table.Stream.scan(User,
   filter_expression: "age > :min_age AND status = :status",
   expression_attribute_values: %{
     ":min_age" => %{"N" => "18"},
@@ -115,7 +115,7 @@ Dynamo.Table.stream_scan(User,
 
 ```elixir
 # Process 100 items at a time
-Dynamo.Table.stream_scan(User, page_size: 500)
+Dynamo.Table.Stream.scan(User, page_size: 500)
 |> Stream.chunk_every(100)
 |> Enum.each(fn batch ->
   # Process batch
@@ -126,7 +126,7 @@ end)
 ### Recipe 3: Track Progress
 
 ```elixir
-Dynamo.Table.stream_scan(User)
+Dynamo.Table.Stream.scan(User)
 |> Stream.with_index()
 |> Stream.each(fn {user, index} ->
   if rem(index, 1000) == 0 do
@@ -140,7 +140,7 @@ end)
 ### Recipe 4: Handle Errors
 
 ```elixir
-Dynamo.Table.stream_scan(User)
+Dynamo.Table.Stream.scan(User)
 |> Stream.each(fn user ->
   try do
     process_user(user)
@@ -156,7 +156,7 @@ end)
 
 ```elixir
 # Process 10 items per second
-Dynamo.Table.stream_scan(User)
+Dynamo.Table.Stream.scan(User)
 |> Stream.each(fn user ->
   process_user(user)
   Process.sleep(100)  # 100ms = 10/second
@@ -200,17 +200,17 @@ page_size: 50-100
 
 ```elixir
 # Lowest memory (5MB)
-Dynamo.Table.stream_scan(User, page_size: 100)
+Dynamo.Table.Stream.scan(User, page_size: 100)
 |> Enum.each(&process_user/1)
 
 # Balanced (40MB)
-Dynamo.Table.stream_parallel_scan(User, segments: 4, page_size: 200)
+Dynamo.Table.Stream.parallel_scan(User, segments: 4, page_size: 200)
 |> Flow.from_enumerable(max_demand: 500)
 |> Flow.map(&process_user/1)
 |> Enum.to_list()
 
 # Highest speed (100MB+)
-Dynamo.Table.stream_parallel_scan(User, segments: 16, page_size: 500)
+Dynamo.Table.Stream.parallel_scan(User, segments: 16, page_size: 500)
 |> Flow.from_enumerable(max_demand: 1000)
 |> Flow.map(&process_user/1)
 |> Enum.to_list()
@@ -226,7 +226,7 @@ defmodule UserExporter do
     file = File.open!(filename, [:write, :utf8])
     IO.write(file, "id,email,name\n")
     
-    count = Dynamo.Table.stream_scan(User, page_size: 500)
+    count = Dynamo.Table.Stream.scan(User, page_size: 500)
     |> Stream.each(fn user ->
       IO.write(file, "#{user.id},#{user.email},#{user.name}\n")
     end)
@@ -246,7 +246,7 @@ UserExporter.export("users.csv")
 ```elixir
 defmodule DataMigration do
   def migrate do
-    Dynamo.Table.stream_parallel_scan(User, segments: 8)
+    Dynamo.Table.Stream.parallel_scan(User, segments: 8)
     |> Flow.from_enumerable(max_demand: 500)
     |> Flow.map(&transform_user/1)
     |> Flow.each(&save_to_new_table/1)
@@ -278,7 +278,7 @@ defmodule Analytics do
   
   def start_scan do
     pid = Process.whereis(__MODULE__)
-    Dynamo.Table.stream_scan_to_process(User, pid, 
+    Dynamo.Table.Stream.scan_to_process(User, pid, 
       segments: 8,
       batch_size: 100
     )
@@ -326,17 +326,17 @@ stats = Analytics.get_stats()
 **Solution**: Use parallel scanning
 ```elixir
 # Instead of:
-Dynamo.Table.stream_scan(User)
+Dynamo.Table.Stream.scan(User)
 
 # Use:
-Dynamo.Table.stream_parallel_scan(User, segments: 8)
+Dynamo.Table.Stream.parallel_scan(User, segments: 8)
 ```
 
 ### Problem: Running out of memory
 
 **Solution**: Reduce page size
 ```elixir
-Dynamo.Table.stream_scan(User, page_size: 50)
+Dynamo.Table.Stream.scan(User, page_size: 50)
 |> Enum.each(&process_user/1)
 ```
 
@@ -344,7 +344,7 @@ Dynamo.Table.stream_scan(User, page_size: 50)
 
 **Solution**: Add rate limiting
 ```elixir
-Dynamo.Table.stream_scan(User)
+Dynamo.Table.Stream.scan(User)
 |> Stream.each(fn user ->
   process_user(user)
   Process.sleep(100)  # Rate limit
