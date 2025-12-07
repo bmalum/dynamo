@@ -23,19 +23,19 @@ defmodule Dynamo.AWS do
   Credentials are resolved in the following order:
   
   1. **Explicit options** - If `access_key_id` and `secret_access_key` are provided in options
-  2. **ECS Full URI** - If `AWS_CONTAINER_CREDENTIALS_FULL_URI` environment variable is set
-  3. **ECS Relative URI** - If `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` environment variable is set (Fargate/ECS)
-  4. **EC2 Instance Metadata** - Queries IMDSv2 at 169.254.169.254 (for EC2 instances with IAM roles)
-  5. **Environment Variables** - Falls back to `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+  2. **Environment Variables** - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+  3. **ECS Full URI** - If `AWS_CONTAINER_CREDENTIALS_FULL_URI` environment variable is set
+  4. **ECS Relative URI** - If `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` environment variable is set (Fargate/ECS)
+  5. **EC2 Instance Metadata** - Queries IMDSv2 at 169.254.169.254 (for EC2 instances with IAM roles)
 
   ## Environment Variables
     * `AWS_REGION` - AWS region to use if not specified in options
     * `AWS_DYNAMODB_ENDPOINT` - Custom endpoint URL if not specified in options
+    * `AWS_ACCESS_KEY_ID` - AWS access key ID
+    * `AWS_SECRET_ACCESS_KEY` - AWS secret access key
+    * `AWS_SESSION_TOKEN` - AWS session token for temporary credentials
     * `AWS_CONTAINER_CREDENTIALS_FULL_URI` - Full URI for ECS task credentials
     * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` - Relative URI for ECS task credentials
-    * `AWS_ACCESS_KEY_ID` - AWS access key ID (fallback)
-    * `AWS_SECRET_ACCESS_KEY` - AWS secret access key (fallback)
-    * `AWS_SESSION_TOKEN` - AWS session token for temporary credentials (fallback)
 
   ## Examples
 
@@ -93,18 +93,20 @@ defmodule Dynamo.AWS do
         }
 
       true ->
-        case fetch_metadata_credentials() do
+        # Check env vars first (fast, no network calls)
+        case fetch_env_credentials() do
           {:ok, creds} -> creds
           {:error, _} ->
-            case fetch_env_credentials() do
+            # Then try metadata endpoints (may hang in dev if not on AWS)
+            case fetch_metadata_credentials() do
               {:ok, creds} -> creds
               {:error, _} ->
                 raise ArgumentError, """
                 AWS credentials not found. Please provide them via:
                 1. Options: access_key_id and secret_access_key
-                2. ECS metadata endpoint (automatic in Fargate/ECS)
-                3. EC2 instance metadata (automatic on EC2)
-                4. Environment variables: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+                2. Environment variables: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+                3. ECS metadata endpoint (automatic in Fargate/ECS)
+                4. EC2 instance metadata (automatic on EC2)
                 """
             end
         end
