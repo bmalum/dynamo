@@ -9,6 +9,7 @@ A comprehensive guide for AI agents and developers on using the Dynamo library e
 - [Partition Key Strategies](#partition-key-strategies)
 - [Sort Key Strategies](#sort-key-strategies)
 - [DynamoDB Best Practices](#dynamodb-best-practices)
+- [Phoenix Contexts](#phoenix-contexts)
 - [Common Patterns](#common-patterns)
 - [Anti-Patterns to Avoid](#anti-patterns-to-avoid)
 - [Quick Reference](#quick-reference)
@@ -462,6 +463,160 @@ Dynamo.Table.Stream.parallel_scan(User, segments: 8)
 ```
 
 **Important:** Streaming reduces memory usage but doesn't reduce cost. Scans still consume read capacity for every item examined. See `guides/STREAMING_GUIDE.md` for detailed documentation.
+
+---
+
+## Phoenix Contexts
+
+Phoenix contexts provide a clean boundary between your web layer and data access. They encapsulate business logic and make your application testable and maintainable.
+
+### Basic Context Structure
+
+```elixir
+# Schema
+defmodule MyApp.Accounts.User do
+  use Dynamo.Schema
+
+  item do
+    table_name "users"
+    
+    field :id, partition_key: true
+    field :email, sort_key: true
+    field :name
+    field :role, default: "user"
+    field :inserted_at
+    
+    global_secondary_index "EmailIndex", partition_key: :email
+  end
+end
+
+# Context
+defmodule MyApp.Accounts do
+  alias MyApp.Accounts.User
+  
+  def list_users do
+    {:ok, Dynamo.Table.Stream.scan(User) |> Enum.to_list()}
+  end
+  
+  def get_user(id, email) do
+    User.get_item(%User{id: id, email: email})
+  end
+  
+  def get_user_by_email(email) do
+    case User.list_items(%User{email: email}, index_name: "EmailIndex") do
+      {:ok, [user | _]} -> {:ok, user}
+      {:ok, []} -> {:error, :not_found}
+      error -> error
+    end
+  end
+  
+  def create_user(attrs) do
+    user = %User{
+      id: generate_id(),
+      email: attrs[:email],
+      name: attrs[:name],
+      role: attrs[:role] || "user",
+      inserted_at: DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+    
+    User.put_item(user)
+  end
+  
+  def update_user(%User{} = user, attrs) do
+    updated = %{user | name: attrs[:name] || user.name}
+    User.put_item(updated)
+  end
+  
+  def delete_user(%User{} = user) do
+    User.delete_item(user)
+  end
+  
+  defp generate_id do
+    "user_" <> (:crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false))
+  end
+end
+```
+
+### Phoenix Controller Integration
+
+```elixir
+defmodule MyAppWeb.UserController do
+  use MyAppWeb, :controller
+  alias MyApp.Accounts
+  
+  def index(conn, _params) do
+    {:ok, users} = Accounts.list_users()
+    render(conn, :index, users: users)
+  end
+  
+  def show(conn, %{"id" => id, "email" => email}) do
+    case Accounts.get_user(id, email) do
+      {:ok, user} -> render(conn, :show, user: user)
+      {:error, :not_found} ->
+        conn
+        |> put_flash(:error, "User not found")
+        |> redirect(to: ~p"/users")
+    end
+  end
+  
+  def create(conn, %{"user" => user_params}) do
+    case Accounts.create_user(user_params) do
+      {:ok, user} ->
+        conn
+        |> put_flash(:info, "User created")
+        |> redirect(to: ~p"/users/#{user.id}")
+      {:error, reason} ->
+        conn
+        |> put_flash(:error, "Failed: #{inspect(reason)}")
+        |> render(:new)
+    end
+  end
+end
+```
+
+### Context Best Practices
+
+1. **Keep contexts focused** - One context per domain (Accounts, Orders, Billing)
+2. **Return tuples** - Use `{:ok, result}` or `{:error, reason}` consistently
+3. **Handle errors** - Convert DynamoDB errors to domain errors
+4. **Use GSIs** - Define GSIs for secondary access patterns
+5. **Document patterns** - List all access patterns in module docs
+
+### Multi-Tenant Pattern
+
+```elixir
+defmodule MyApp.Organizations do
+  alias MyApp.Organizations.Member
+  
+  def list_members(org_id) do
+    Member.list_items(%Member{org_id: org_id})
+  end
+  
+  def add_member(org_id, user_id, role \\ "member") do
+    member = %Member{
+      org_id: org_id,
+      user_id: user_id,
+      role: role,
+      joined_at: DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+    Member.put_item(member)
+  end
+end
+
+defmodule MyApp.Organizations.Member do
+  use Dynamo.Schema
+  
+  item do
+    table_name "org_members"
+    field :org_id, partition_key: true
+    field :user_id, sort_key: true
+    field :role
+    field :joined_at
+  end
+end
+```
+
+**See `guides/PHOENIX_CONTEXT_GUIDE.md` for comprehensive examples including authentication, e-commerce, transactions, and testing strategies.**
 
 ---
 

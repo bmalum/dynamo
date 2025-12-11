@@ -5,7 +5,13 @@ defmodule Dynamo.AWS do
   This module handles the creation and configuration of AWS clients used for
   interacting with DynamoDB. It supports customization through options and
   environment variables, including session tokens for temporary credentials.
+  
+  Credentials from metadata endpoints (ECS/EC2) are cached and automatically
+  refreshed when they expire.
   """
+
+  @cache_table :dynamo_aws_credentials
+  @refresh_buffer_seconds 300  # Refresh 5 minutes before expiry
 
   @doc """
   Creates an AWS client for DynamoDB operations.
@@ -23,19 +29,19 @@ defmodule Dynamo.AWS do
   Credentials are resolved in the following order:
   
   1. **Explicit options** - If `access_key_id` and `secret_access_key` are provided in options
-  2. **ECS Full URI** - If `AWS_CONTAINER_CREDENTIALS_FULL_URI` environment variable is set
-  3. **ECS Relative URI** - If `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` environment variable is set (Fargate/ECS)
-  4. **EC2 Instance Metadata** - Queries IMDSv2 at 169.254.169.254 (for EC2 instances with IAM roles)
-  5. **Environment Variables** - Falls back to `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+  2. **Environment Variables** - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+  3. **ECS Full URI** - If `AWS_CONTAINER_CREDENTIALS_FULL_URI` environment variable is set
+  4. **ECS Relative URI** - If `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` environment variable is set (Fargate/ECS)
+  5. **EC2 Instance Metadata** - Queries IMDSv2 at 169.254.169.254 (for EC2 instances with IAM roles)
 
   ## Environment Variables
     * `AWS_REGION` - AWS region to use if not specified in options
     * `AWS_DYNAMODB_ENDPOINT` - Custom endpoint URL if not specified in options
+    * `AWS_ACCESS_KEY_ID` - AWS access key ID
+    * `AWS_SECRET_ACCESS_KEY` - AWS secret access key
+    * `AWS_SESSION_TOKEN` - AWS session token for temporary credentials
     * `AWS_CONTAINER_CREDENTIALS_FULL_URI` - Full URI for ECS task credentials
     * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` - Relative URI for ECS task credentials
-    * `AWS_ACCESS_KEY_ID` - AWS access key ID (fallback)
-    * `AWS_SECRET_ACCESS_KEY` - AWS secret access key (fallback)
-    * `AWS_SESSION_TOKEN` - AWS session token for temporary credentials (fallback)
 
   ## Examples
 
@@ -93,22 +99,71 @@ defmodule Dynamo.AWS do
         }
 
       true ->
-        case fetch_metadata_credentials() do
+        # Check env vars first (fast, no network calls)
+        case fetch_env_credentials() do
           {:ok, creds} -> creds
           {:error, _} ->
-            case fetch_env_credentials() do
+            # Then try cached/metadata credentials
+            case get_cached_or_fetch_metadata_credentials() do
               {:ok, creds} -> creds
               {:error, _} ->
                 raise ArgumentError, """
                 AWS credentials not found. Please provide them via:
                 1. Options: access_key_id and secret_access_key
-                2. ECS metadata endpoint (automatic in Fargate/ECS)
-                3. EC2 instance metadata (automatic on EC2)
-                4. Environment variables: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+                2. Environment variables: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+                3. ECS metadata endpoint (automatic in Fargate/ECS)
+                4. EC2 instance metadata (automatic on EC2)
                 """
             end
         end
     end
+  end
+
+  defp get_cached_or_fetch_metadata_credentials do
+    ensure_cache_table()
+    
+    case :ets.lookup(@cache_table, :credentials) do
+      [{:credentials, creds, expires_at}] ->
+        if credentials_valid?(expires_at) do
+          {:ok, creds}
+        else
+          fetch_and_cache_metadata_credentials()
+        end
+      [] ->
+        fetch_and_cache_metadata_credentials()
+    end
+  end
+
+  defp fetch_and_cache_metadata_credentials do
+    case fetch_metadata_credentials() do
+      {:ok, creds, expires_at} ->
+        :ets.insert(@cache_table, {:credentials, creds, expires_at})
+        {:ok, creds}
+      {:ok, creds} ->
+        # No expiration (shouldn't happen with metadata, but handle it)
+        {:ok, creds}
+      error ->
+        error
+    end
+  end
+
+  defp credentials_valid?(expires_at) when is_binary(expires_at) do
+    case DateTime.from_iso8601(expires_at) do
+      {:ok, exp_dt, _} ->
+        now = DateTime.utc_now()
+        buffer = DateTime.add(now, @refresh_buffer_seconds, :second)
+        DateTime.compare(exp_dt, buffer) == :gt
+      _ ->
+        false
+    end
+  end
+  defp credentials_valid?(_), do: false
+
+  defp ensure_cache_table do
+    if :ets.whereis(@cache_table) == :undefined do
+      :ets.new(@cache_table, [:set, :public, :named_table])
+    end
+    :ok
   end
 
   defp fetch_metadata_credentials do
@@ -126,7 +181,7 @@ defmodule Dynamo.AWS do
 
   defp fetch_ecs_full_uri_credentials(uri) do
     case Req.get(uri, receive_timeout: 5000) do
-      {:ok, %{status: 200, body: body}} -> parse_credentials(body)
+      {:ok, %{status: 200, body: body}} -> parse_credentials_with_expiration(body)
       _ -> {:error, :metadata_fetch_failed}
     end
   end
@@ -135,7 +190,7 @@ defmodule Dynamo.AWS do
     url = "http://169.254.170.2#{relative_uri}"
     
     case Req.get(url, receive_timeout: 5000) do
-      {:ok, %{status: 200, body: body}} -> parse_credentials(body)
+      {:ok, %{status: 200, body: body}} -> parse_credentials_with_expiration(body)
       _ -> {:error, :metadata_fetch_failed}
     end
   end
@@ -144,7 +199,7 @@ defmodule Dynamo.AWS do
     with {:ok, token} <- fetch_imds_token(),
          {:ok, role} <- fetch_imds_role(token),
          {:ok, body} <- fetch_imds_credentials(token, role) do
-      parse_credentials(body)
+      parse_credentials_with_expiration(body)
     else
       _ -> {:error, :metadata_fetch_failed}
     end
@@ -193,22 +248,24 @@ defmodule Dynamo.AWS do
     end
   end
 
-  defp parse_credentials(body) when is_binary(body) do
+  defp parse_credentials_with_expiration(body) when is_binary(body) do
     case Jason.decode(body) do
-      {:ok, parsed} -> parse_credentials(parsed)
+      {:ok, parsed} -> parse_credentials_with_expiration(parsed)
       _ -> {:error, :invalid_credentials_format}
     end
   end
 
-  defp parse_credentials(%{"AccessKeyId" => access_key, "SecretAccessKey" => secret_key, "Token" => token}) do
-    {:ok, %{
+  defp parse_credentials_with_expiration(%{"AccessKeyId" => access_key, "SecretAccessKey" => secret_key, "Token" => token} = body) do
+    creds = %{
       access_key_id: access_key,
       secret_access_key: secret_key,
       session_token: token
-    }}
+    }
+    expires_at = body["Expiration"]
+    {:ok, creds, expires_at}
   end
 
-  defp parse_credentials(_), do: {:error, :invalid_credentials_format}
+  defp parse_credentials_with_expiration(_), do: {:error, :invalid_credentials_format}
 
   @doc """
   Makes a DynamoDB API request using the AWS Signature Version 4.
