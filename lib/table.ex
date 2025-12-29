@@ -872,9 +872,19 @@ defmodule Dynamo.Table do
     with :ok <- validate_gsi_options(options),
          {:ok, gsi_config} <-
            Dynamo.Schema.validate_gsi_config(struct, index_name, requires_sort_key) do
-      # Generate GSI-specific partition and sort keys
+      # Generate GSI-specific partition key
       gsi_pk = Dynamo.Schema.generate_gsi_partition_key(struct, gsi_config)
+
+      # Generate sort key - will be nil if GSI has no sort key or field is unpopulated
       gsi_sk = Dynamo.Schema.generate_gsi_sort_key(struct, gsi_config)
+
+      # Only use sort key in query if we have a value and need sort operations
+      final_gsi_sk = 
+        if requires_sort_key && gsi_sk != nil do
+          gsi_sk
+        else
+          nil
+        end
 
       # Get GSI key names - use the actual field names for the GSI
       gsi_partition_key_name = Atom.to_string(gsi_config.partition_key)
@@ -891,7 +901,7 @@ defmodule Dynamo.Table do
           limit: :infinity,
           schema_module: struct.__struct__,
           index_name: index_name,
-          sort_key: gsi_sk,
+          sort_key: final_gsi_sk,
           gsi_partition_key_name: gsi_partition_key_name,
           gsi_sort_key_name: gsi_sort_key_name
         ]

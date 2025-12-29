@@ -388,7 +388,7 @@ defmodule Dynamo.SchemaTest do
 
       gsi_config = %{partition_key: :tenant, sort_key: :created_at}
       sort_key = Dynamo.Schema.generate_gsi_sort_key(item, gsi_config)
-      assert sort_key == "empty"
+      assert sort_key == nil
     end
 
     test "generates GSI sort key with nil values" do
@@ -396,7 +396,7 @@ defmodule Dynamo.SchemaTest do
 
       gsi_config = %{partition_key: :tenant, sort_key: :created_at}
       sort_key = Dynamo.Schema.generate_gsi_sort_key(item, gsi_config)
-      assert sort_key == "empty"
+      assert sort_key == nil
     end
 
     test "returns nil for partition-only GSI sort key" do

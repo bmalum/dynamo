@@ -511,11 +511,10 @@ defmodule Dynamo.Schema do
 
       sort_key_field ->
         # Get the GSI sort key field value
-        field_value = Map.get(struct, sort_key_field, "empty")
-        field_value = if field_value == nil, do: "empty", else: field_value
-
-        # For GSI keys, just return the raw field value without any prefixing
-        to_string(field_value)
+        field_value = Map.get(struct, sort_key_field)
+        
+        # Return nil if field is not populated, otherwise convert to string
+        if field_value == nil, do: nil, else: to_string(field_value)
     end
   end
 
